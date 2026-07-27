@@ -8,10 +8,21 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Aggiunto
+- Pagina dedicata nella barra laterale ("Irrigazione"): mostra la posizione
+  configurata, le sorgenti dati meteo con i valori live dei sensori e la
+  sezione Zone (per ora vuota). Prima interfaccia visibile dell'integration.
+  Implementata come pannello custom (`www/irrigazione-smart-panel.js`) con
+  una piccola API interna `/api/irrigazione_smart/overview` (`panel.py`)
+- Richiede un riavvio di Home Assistant dopo l'aggiornamento perché la voce
+  in sidebar venga registrata
+
 ### Modificato
 - Nuova icona del brand: sagoma "casa" cyan con irrigatore, spruzzi e
   cespugli. Sorgente vettoriale in `brand-src/icon.svg`, PNG rigenerati in
   `custom_components/irrigazione_smart/brand/`
+- Versione minima di Home Assistant portata a 2024.7 (uso di
+  `async_register_static_paths`)
 
 ## [0.1.1] - 2026-07-27
 

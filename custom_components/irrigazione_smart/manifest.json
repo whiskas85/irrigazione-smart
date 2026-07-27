@@ -11,5 +11,5 @@
   "iot_class": "local_polling",
   "integration_type": "service",
   "requirements": [],
-  "dependencies": []
+  "dependencies": ["http", "frontend", "panel_custom"]
 }
