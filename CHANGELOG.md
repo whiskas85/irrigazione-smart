@@ -13,8 +13,9 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
   quindi nessun problema veniva mai segnalato:
   - `hassfest` pretende le chiavi del manifest nell'ordine `domain`, `name`
     e poi alfabetico; non lo erano
-  - il controllo `brands` di HACS vale solo per le integration del catalogo
-    ufficiale, non per una personalizzata che porta le proprie icone
+  - resta rosso il controllo `Check Repository` di HACS, che pretende
+    descrizione e argomenti impostati sul repository GitHub: sono
+    impostazioni del repository, non del codice
   - la CI installava `ruff` senza versione fissa: il set di regole cambiava
     da solo a ogni rilascio e il lint poteva rompersi senza modifiche al
     codice. Ora le regole stanno in `pyproject.toml` e la versione è fissata

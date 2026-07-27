@@ -20,14 +20,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Il controllo "brands" si accontenta di una cartella `brand/` con
+      # almeno `icon.png`, che l'integration porta con sé: non serve
+      # disattivarlo.
       - uses: hacs/action@main
         with:
           category: integration
-          # Il controllo "brands" pretende che il dominio sia registrato in
-          # home-assistant/brands, cosa che vale solo per le integration del
-          # catalogo ufficiale. Questa è un'integration personalizzata e
-          # porta le proprie icone in `brand/`.
-          ignore: brands
 
   lint:
     name: Ruff
