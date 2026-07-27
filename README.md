@@ -8,9 +8,14 @@ Integration per Home Assistant che sostituisce i timer a durata fissa con un
 evapotraspirazione, quanta gliene ha restituita la pioggia, e irriga solo
 quando serve — per il tempo che serve.
 
-> **Stato: scaffold (v0.1.0).** Il motore di calcolo è completo e
-> verificabile. L'integration si installa e si configura, ma non crea
-> ancora entità. Vedi la [roadmap](SPEC.md#11-roadmap).
+> **Stato: funzionante.** Motore di calcolo, pannello con gestione delle
+> zone, entità esposte ed esecuzione delle valvole sono operativi. Le
+> notifiche configurabili e la dashboard grafica sono in lavorazione: vedi
+> la [roadmap](SPEC.md#11-roadmap).
+>
+> Prima di lasciare il sistema in automatico, misura la **portata reale**
+> di ogni linea col *tuna can test* (vedi [Calibrazione](#calibrazione)):
+> senza quel dato le durate calcolate sono arbitrarie.
 
 ## Perché
 
@@ -47,6 +52,15 @@ terreno, non quando lo dice il calendario.
   ma il sistema ti dice cosa stai barattando
 - **Tetto massimo di durata** — opzionale, e il deficit non coperto resta
   a bilancio invece di sparire
+- **Pagina dedicata** — nella barra laterale, divisa in Dashboard, Zone e
+  Meteo, con master generale e master per ogni linea
+- **Entità esposte** — interruttori master e di linea, ET0, deficit e
+  durata prevista per zona: usabili in automazioni, scene e dashboard
+- **Conferma di apertura valvola** — nessuna linea è data per irrigata solo
+  perché è stato dato il comando: senza conferma di stato la linea viene
+  saltata e il deficit resta a bilancio
+- **Servizi ed eventi** — forzatura di una linea o dell'intera sequenza, e
+  quattro eventi sul bus per agganciare automazioni esterne
 
 ## Installazione via HACS
 
@@ -66,6 +80,20 @@ Il repository non è nel catalogo predefinito: va aggiunto come
 
 Copia `custom_components/irrigazione_smart/` in `/config/custom_components/`
 e riavvia.
+
+> Installando a mano **non riceverai alcuna notifica di aggiornamento**:
+> non esiste un meccanismo che confronti la tua copia col repository.
+> Per essere avvisato, installa via HACS.
+
+### Aggiornamenti
+
+HACS propone un aggiornamento quando esiste una **release GitHub** più
+recente della versione nel manifest installato. Non basta pubblicare
+commit: senza una release, HACS non ha nulla da confrontare e non
+segnalerà mai nulla.
+
+Se hai appena pubblicato una release e HACS non la vede ancora, apri
+**HACS → menu ⋮ → Ricarica dati**: il catalogo è messo in cache.
 
 ## Configurazione
 
