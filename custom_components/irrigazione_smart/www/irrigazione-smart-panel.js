@@ -1,9 +1,11 @@
 /*
  * Pannello laterale di Irrigazione Smart.
  *
- * Web component vanilla (nessun passo di build): Home Assistant assegna la
- * proprietà `hass`; il pannello legge la configurazione dall'API interna
- * `/api/irrigazione_smart/overview` e i valori live da `hass.states`.
+ * Web component vanilla (nessun passo di build). Usa i componenti nativi di
+ * Home Assistant (ha-top-app-bar-fixed, ha-menu-button, ha-card, ha-alert,
+ * ha-icon) e solo variabili di tema, così l'aspetto segue automaticamente
+ * qualsiasi tema attivo. La configurazione arriva dall'API interna
+ * `/api/irrigazione_smart/overview`; i valori live da `hass.states`.
  */
 
 const SENSORS = [
@@ -21,7 +23,6 @@ class IrrigazioneSmartPanel extends HTMLElement {
     this._overview = null;
     this._loading = false;
     this._error = null;
-    this._lastRender = 0;
   }
 
   set hass(hass) {
@@ -30,12 +31,14 @@ class IrrigazioneSmartPanel extends HTMLElement {
       if (!this._loading) this._fetchOverview();
       return;
     }
-    // Ridisegna al massimo una volta al secondo per i valori live.
-    if (Date.now() - this._lastRender > 1000) this._render();
+    // Aggiorna solo i valori live, senza ricostruire i componenti nativi.
+    this._updateLiveValues();
+    this._updateMenuButton();
   }
 
   set narrow(value) {
     this._narrow = value;
+    this._updateMenuButton();
   }
   set route(_value) {}
   set panel(_value) {}
@@ -66,9 +69,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
   _liveState(entityId) {
     if (!entityId || !this._hass) return null;
     const st = this._hass.states[entityId];
-    if (!st) {
-      return { missing: true, name: entityId };
-    }
+    if (!st) return { missing: true, name: entityId };
     return {
       name: st.attributes.friendly_name || entityId,
       value: st.state,
@@ -81,23 +82,39 @@ class IrrigazioneSmartPanel extends HTMLElement {
     return typeof v === "number" ? v.toFixed(4) : "—";
   }
 
+  _updateLiveValues() {
+    if (!this.shadowRoot) return;
+    this.shadowRoot.querySelectorAll("[data-entity]").forEach((node) => {
+      const live = this._liveState(node.getAttribute("data-entity"));
+      if (live && !live.missing) {
+        node.textContent = live.value + (live.unit ? " " + live.unit : "");
+      }
+    });
+  }
+
+  _updateMenuButton() {
+    const mb = this.shadowRoot && this.shadowRoot.querySelector("ha-menu-button");
+    if (mb) {
+      mb.hass = this._hass;
+      mb.narrow = this._narrow;
+    }
+  }
+
   _render() {
-    this._lastRender = Date.now();
     this.shadowRoot.innerHTML = `
       <style>${this._css()}</style>
-      <div class="app">
-        <header class="bar">
-          <button class="menu" title="Menu" aria-label="Menu">
-            <ha-icon icon="mdi:menu"></ha-icon>
-          </button>
-          <ha-icon class="brand" icon="mdi:sprinkler-variant"></ha-icon>
-          <span class="title">Irrigazione Smart</span>
-        </header>
-        <main class="content">${this._body()}</main>
-      </div>
+      <ha-top-app-bar-fixed>
+        <ha-menu-button slot="navigationIcon"></ha-menu-button>
+        <div slot="title" class="app-title">
+          <ha-icon icon="mdi:sprinkler-variant"></ha-icon>
+          <span>Irrigazione Smart</span>
+        </div>
+        <div class="content">${this._body()}</div>
+      </ha-top-app-bar-fixed>
     `;
-    const menu = this.shadowRoot.querySelector(".menu");
-    if (menu) menu.addEventListener("click", () => this._toggleMenu());
+    this._updateMenuButton();
+    const fallback = this.shadowRoot.querySelector(".menu-fallback");
+    if (fallback) fallback.addEventListener("click", () => this._toggleMenu());
   }
 
   _body() {
@@ -105,18 +122,16 @@ class IrrigazioneSmartPanel extends HTMLElement {
       return `<div class="empty">Caricamento…</div>`;
     }
     if (this._error) {
-      return `<div class="card error">
-        <ha-icon icon="mdi:alert-circle-outline"></ha-icon>
-        <div>Impossibile leggere la configurazione.<br><small>${this._error}</small></div>
-      </div>`;
+      return `<ha-alert alert-type="error" title="Errore">
+        Impossibile leggere la configurazione: ${this._error}
+      </ha-alert>`;
     }
     if (!this._overview || !this._overview.configured) {
-      return `<div class="card">
-        <div class="card-head"><ha-icon icon="mdi:cog-outline"></ha-icon><h2>Non ancora configurata</h2></div>
-        <p class="muted">Aggiungi l'integrazione da <b>Impostazioni → Dispositivi e servizi</b> per impostare posizione e sensori.</p>
-      </div>`;
+      return `<ha-alert alert-type="info" title="Non ancora configurata">
+        Aggiungi l'integrazione da Impostazioni → Dispositivi e servizi per
+        impostare posizione e sensori.
+      </ha-alert>`;
     }
-
     const sys = this._overview.system;
     return `
       ${this._banner()}
@@ -127,21 +142,23 @@ class IrrigazioneSmartPanel extends HTMLElement {
   }
 
   _banner() {
-    return `<div class="banner">
-      <ha-icon icon="mdi:information-outline"></ha-icon>
-      <span>Questa versione mostra la configurazione e i sensori. La gestione delle zone e i calcoli in tempo reale arrivano nelle prossime versioni.</span>
-    </div>`;
+    return `<ha-alert alert-type="info">
+      Questa versione mostra la configurazione e i sensori. La gestione delle
+      zone e i calcoli in tempo reale arrivano nelle prossime versioni.
+    </ha-alert>`;
   }
 
   _locationCard(sys) {
-    return `<div class="card">
-      <div class="card-head"><ha-icon icon="mdi:map-marker-outline"></ha-icon><h2>Posizione</h2></div>
-      <div class="grid">
-        <div class="cell"><span class="k">Latitudine</span><span class="v">${this._fmtCoord(sys.latitude)}</span></div>
-        <div class="cell"><span class="k">Longitudine</span><span class="v">${this._fmtCoord(sys.longitude)}</span></div>
-        <div class="cell"><span class="k">Altitudine</span><span class="v">${sys.elevation ?? "—"} m</span></div>
+    return `<ha-card>
+      <div class="inner">
+        <div class="card-head"><ha-icon icon="mdi:map-marker-outline"></ha-icon><h2>Posizione</h2></div>
+        <div class="grid">
+          <div class="cell"><span class="k">Latitudine</span><span class="v">${this._fmtCoord(sys.latitude)}</span></div>
+          <div class="cell"><span class="k">Longitudine</span><span class="v">${this._fmtCoord(sys.longitude)}</span></div>
+          <div class="cell"><span class="k">Altitudine</span><span class="v">${sys.elevation ?? "—"} m</span></div>
+        </div>
       </div>
-    </div>`;
+    </ha-card>`;
   }
 
   _sensorsCard(sys) {
@@ -157,7 +174,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
       } else if (live && live.missing) {
         right = `<span class="badge warn">non disponibile</span>`;
       } else {
-        right = `<span class="reading">${live.value}${
+        right = `<span class="reading" data-entity="${entityId}">${live.value}${
           live.unit ? " " + live.unit : ""
         }</span>`;
       }
@@ -181,69 +198,60 @@ class IrrigazioneSmartPanel extends HTMLElement {
       }
     </div>`;
 
-    return `<div class="card">
-      <div class="card-head"><ha-icon icon="mdi:gauge"></ha-icon><h2>Sorgenti dati meteo</h2></div>
-      ${rows}
-      <div class="divider"></div>
-      ${weather}
-    </div>`;
+    return `<ha-card>
+      <div class="inner">
+        <div class="card-head"><ha-icon icon="mdi:gauge"></ha-icon><h2>Sorgenti dati meteo</h2></div>
+        ${rows}
+        ${weather}
+      </div>
+    </ha-card>`;
   }
 
   _zonesCard() {
-    return `<div class="card">
-      <div class="card-head"><ha-icon icon="mdi:sprinkler"></ha-icon><h2>Zone</h2></div>
-      <div class="empty-state">
-        <ha-icon icon="mdi:sprinkler-variant"></ha-icon>
-        <p>Nessuna zona configurata.</p>
-        <p class="muted small">La creazione e la gestione delle zone di irrigazione arriveranno in una versione successiva.</p>
+    return `<ha-card>
+      <div class="inner">
+        <div class="card-head"><ha-icon icon="mdi:sprinkler"></ha-icon><h2>Zone</h2></div>
+        <div class="empty-state">
+          <ha-icon icon="mdi:sprinkler-variant"></ha-icon>
+          <p>Nessuna zona configurata.</p>
+          <p class="muted small">La creazione e la gestione delle zone di irrigazione arriveranno in una versione successiva.</p>
+        </div>
       </div>
-    </div>`;
+    </ha-card>`;
   }
 
   _css() {
     return `
-      :host { display: block; background: var(--primary-background-color); min-height: 100vh; color: var(--primary-text-color); }
-      .app { display: flex; flex-direction: column; min-height: 100vh; }
-      .bar { display: flex; align-items: center; gap: 12px; height: 56px; padding: 0 12px;
-             background: var(--app-header-background-color, var(--primary-color));
-             color: var(--app-header-text-color, #fff); box-shadow: var(--ha-card-box-shadow, 0 2px 4px rgba(0,0,0,.2)); }
-      .bar .brand { --mdc-icon-size: 26px; }
-      .bar .title { font-size: 20px; font-weight: 500; }
-      .menu { background: none; border: none; color: inherit; cursor: pointer; padding: 6px; display: flex; border-radius: 50%; }
-      .menu:hover { background: rgba(255,255,255,.12); }
-      .content { padding: 16px; max-width: 720px; width: 100%; margin: 0 auto; box-sizing: border-box; }
-      .banner { display: flex; gap: 10px; align-items: center; padding: 12px 14px; margin-bottom: 16px;
-                background: var(--card-background-color); border-left: 4px solid var(--info-color, var(--primary-color));
-                border-radius: 8px; font-size: 14px; color: var(--secondary-text-color); }
-      .banner ha-icon { color: var(--info-color, var(--primary-color)); flex: 0 0 auto; }
-      .card { background: var(--card-background-color); border-radius: var(--ha-card-border-radius, 12px);
-              box-shadow: var(--ha-card-box-shadow, 0 2px 6px rgba(0,0,0,.12)); padding: 16px; margin-bottom: 16px; }
-      .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+      :host { display: block; height: 100%; background: var(--primary-background-color); }
+      .app-title { display: flex; align-items: center; gap: 8px; }
+      .content { padding: 16px; max-width: 720px; margin: 0 auto; box-sizing: border-box; }
+      ha-alert { display: block; margin-bottom: 16px; }
+      ha-card { display: block; margin-bottom: 16px; }
+      .inner { padding: 16px; }
+      .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
       .card-head ha-icon { color: var(--primary-color); }
-      .card-head h2 { font-size: 16px; font-weight: 600; margin: 0; }
-      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
+      .card-head h2 { font-size: 16px; font-weight: 600; margin: 0; color: var(--primary-text-color); }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin-top: 12px; }
       .cell { display: flex; flex-direction: column; gap: 2px; }
       .cell .k { font-size: 12px; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: .03em; }
-      .cell .v { font-size: 20px; font-weight: 600; }
-      .row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--divider-color); }
-      .row:last-child { border-bottom: none; }
+      .cell .v { font-size: 20px; font-weight: 600; color: var(--primary-text-color); }
+      .row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--divider-color); }
+      .row:first-of-type { margin-top: 8px; }
+      .row:last-child { border-bottom: none; padding-bottom: 0; }
       .row > ha-icon { color: var(--state-icon-color, var(--secondary-text-color)); flex: 0 0 auto; }
       .row-main { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; }
-      .row-label { font-size: 15px; }
+      .row-label { font-size: 15px; color: var(--primary-text-color); }
       .sub { font-size: 12px; color: var(--secondary-text-color); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .reading { font-size: 16px; font-weight: 600; white-space: nowrap; }
+      .reading { font-size: 16px; font-weight: 600; white-space: nowrap; color: var(--primary-text-color); }
       .reading.small { font-size: 13px; font-weight: 500; color: var(--secondary-text-color); }
-      .badge { font-size: 12px; padding: 3px 8px; border-radius: 12px; white-space: nowrap; }
+      .badge { font-size: 12px; padding: 3px 10px; border-radius: 14px; white-space: nowrap; }
       .badge.muted { background: var(--divider-color); color: var(--secondary-text-color); }
-      .badge.warn { background: var(--warning-color, #ffa600); color: #222; }
-      .divider { height: 1px; background: var(--divider-color); margin: 4px 0; }
+      .badge.warn { background: var(--warning-color, #ffa600); color: var(--text-primary-color, #212121); }
       .muted { color: var(--secondary-text-color); }
       .small { font-size: 13px; }
       .empty, .empty-state { text-align: center; color: var(--secondary-text-color); padding: 24px 8px; }
       .empty-state ha-icon { --mdc-icon-size: 40px; color: var(--disabled-text-color); }
       .empty-state p { margin: 6px 0; }
-      .card.error { display: flex; gap: 12px; align-items: center; border-left: 4px solid var(--error-color, #db4437); }
-      .card.error ha-icon { color: var(--error-color, #db4437); }
     `;
   }
 }

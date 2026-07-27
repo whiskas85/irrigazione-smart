@@ -13,7 +13,10 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
   configurata, le sorgenti dati meteo con i valori live dei sensori e la
   sezione Zone (per ora vuota). Prima interfaccia visibile dell'integration.
   Implementata come pannello custom (`www/irrigazione-smart-panel.js`) con
-  una piccola API interna `/api/irrigazione_smart/overview` (`panel.py`)
+  una piccola API interna `/api/irrigazione_smart/overview` (`panel.py`).
+  Usa i componenti nativi di Home Assistant (`ha-top-app-bar-fixed`,
+  `ha-card`, `ha-alert`, `ha-menu-button`) e solo variabili di tema, così
+  l'aspetto segue automaticamente qualsiasi tema, chiaro o scuro
 - Richiede un riavvio di Home Assistant dopo l'aggiornamento perché la voce
   in sidebar venga registrata
 
