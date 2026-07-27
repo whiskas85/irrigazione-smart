@@ -1,0 +1,15 @@
+{
+  "domain": "irrigazione_smart",
+  "name": "Irrigazione Smart",
+  "version": "0.1.1",
+  "documentation": "https://github.com/whiskas85/irrigazione-smart",
+  "issue_tracker": "https://github.com/whiskas85/irrigazione-smart/issues",
+  "codeowners": [
+    "@whiskas85"
+  ],
+  "config_flow": true,
+  "iot_class": "local_polling",
+  "integration_type": "service",
+  "requirements": [],
+  "dependencies": []
+}

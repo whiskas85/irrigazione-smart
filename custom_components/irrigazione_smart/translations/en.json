@@ -1,0 +1,24 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Irrigazione Smart",
+        "description": "System location and weather data sources. Local sensors are optional: the weather service is used where they are missing.",
+        "data": {
+          "latitude": "Latitude",
+          "longitude": "Longitude",
+          "elevation": "Elevation",
+          "weather_entity": "Weather service (fallback)",
+          "temperature_entity": "Temperature sensor",
+          "humidity_entity": "Humidity sensor",
+          "wind_entity": "Wind sensor",
+          "rain_entity": "Rain gauge",
+          "irradiance_entity": "Irradiance sensor"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Irrigazione Smart is already configured."
+    }
+  }
+}

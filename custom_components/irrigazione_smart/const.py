@@ -1,0 +1,26 @@
+"""Costanti di irrigazione_smart."""
+
+from __future__ import annotations
+
+from typing import Final
+
+from homeassistant.const import Platform
+
+DOMAIN: Final = "irrigazione_smart"
+
+# Chiavi di configurazione
+CONF_ELEVATION: Final = "elevation"
+CONF_WEATHER_ENTITY: Final = "weather_entity"
+CONF_TEMPERATURE_ENTITY: Final = "temperature_entity"
+CONF_HUMIDITY_ENTITY: Final = "humidity_entity"
+CONF_WIND_ENTITY: Final = "wind_entity"
+CONF_RAIN_ENTITY: Final = "rain_entity"
+CONF_IRRADIANCE_ENTITY: Final = "irradiance_entity"
+
+# Storage
+STORAGE_KEY: Final = f"{DOMAIN}.zones"
+STORAGE_VERSION: Final = 1
+STORAGE_SAVE_DELAY: Final = 10  # secondi di debounce: protegge la SD del Pi
+
+# Le platform si popolano dalla fase 3 in poi (vedi SPEC.md §11)
+PLATFORMS: Final[list[Platform]] = []

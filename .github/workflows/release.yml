@@ -1,0 +1,30 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verifica che il tag corrisponda al manifest
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          MANIFEST=$(python -c "import json;print(json.load(open('custom_components/irrigazione_smart/manifest.json'))['version'])")
+          if [ "$TAG" != "$MANIFEST" ]; then
+            echo "::error::Tag $TAG diverso da manifest $MANIFEST"
+            exit 1
+          fi
+          echo "Tag e manifest allineati: $TAG"
+
+      - name: Crea la release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true

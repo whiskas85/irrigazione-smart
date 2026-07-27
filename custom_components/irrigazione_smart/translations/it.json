@@ -1,0 +1,24 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Irrigazione Smart",
+        "description": "Posizione dell'impianto e fonti dei dati meteo. I sensori locali sono opzionali: dove mancano si usa il servizio meteo.",
+        "data": {
+          "latitude": "Latitudine",
+          "longitude": "Longitudine",
+          "elevation": "Quota sul livello del mare",
+          "weather_entity": "Servizio meteo (fallback)",
+          "temperature_entity": "Sensore temperatura",
+          "humidity_entity": "Sensore umidità",
+          "wind_entity": "Sensore vento",
+          "rain_entity": "Pluviometro",
+          "irradiance_entity": "Sensore irraggiamento"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Irrigazione Smart è già configurata."
+    }
+  }
+}
