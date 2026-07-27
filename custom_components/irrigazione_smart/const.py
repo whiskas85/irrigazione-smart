@@ -22,5 +22,9 @@ STORAGE_KEY: Final = f"{DOMAIN}.zones"
 STORAGE_VERSION: Final = 1
 STORAGE_SAVE_DELAY: Final = 10  # secondi di debounce: protegge la SD del Pi
 
+# Cadenza di campionamento del meteo. Serve ad accumulare gli estremi della
+# giornata, non a reagire in tempo reale: 10 minuti bastano e non pesano.
+UPDATE_INTERVAL_MIN: Final = 10
+
 # Le platform si popolano dalla fase 3 in poi (vedi SPEC.md §11)
 PLATFORMS: Final[list[Platform]] = []

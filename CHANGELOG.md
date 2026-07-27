@@ -9,6 +9,31 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 ## [Unreleased]
 
 ### Aggiunto
+- **Coordinator**: il bilancio idrico ora si aggiorna da solo (`coordinator.py`).
+  Ogni 10 minuti campiona le sorgenti meteo e accumula gli estremi della
+  giornata; dopo la mezzanotte chiude il giorno, calcola ET0 e aggiorna il
+  deficit di tutte le zone. FAO-56 lavora su grandezze giornaliere: leggere
+  un valore istantaneo darebbe un ET0 sistematicamente sbagliato
+- Il metodo ET0 si sceglie da solo in base ai sensori disponibili
+  (Hargreaves-Samani con le sole temperature, Penman-Monteith con umidità e
+  vento, Penman-Monteith pieno con l'irraggiamento) ed è mostrato in pagina:
+  l'utente deve sapere su quale modello gira il suo impianto
+- Card "Bilancio idrico": ET0 dell'ultimo giorno chiuso con il metodo usato,
+  e l'accumulo della giornata in corso (T min/max, pioggia, medie di umidità
+  e vento)
+- Gli accumulatori giornalieri sono persistiti: un riavvio a metà pomeriggio
+  non fa perdere la massima già registrata
+- La provenienza di ogni misura (sensore locale o servizio meteo) è visibile
+  in pagina: se un sensore cade e il sistema ripiega sul meteo, si vede
+- Le zone mostrano i blocchi reali (vento eccessivo, sistema in pausa, zona
+  disabilitata, gelo) con lo stesso criterio che userà l'esecuzione
+- Conversione automatica delle unità in ingresso (°F, km/h, mph, nodi)
+
+### Note
+Tutto il funzionamento è **locale**: nessuna dipendenza esterna
+(`requirements` vuoto), nessuna chiamata di rete, frontend servito
+dall'installazione. I dati meteo arrivano dalle entità già presenti in
+Home Assistant.
 - **Gestione zone dal pannello**: creazione, modifica ed eliminazione delle
   zone direttamente dalla pagina, senza riavviare. Le zone sono persistite
   in `.storage/irrigazione_smart.zones` con salvataggio debounced (`store.py`,

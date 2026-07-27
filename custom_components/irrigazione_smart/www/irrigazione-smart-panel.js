@@ -39,6 +39,47 @@ const EMITTER_LABELS = {
 const INHERIT_NUM = -1;
 const INHERIT_STR = "eredita";
 
+const ET0_METHOD_LABELS = {
+  hargreaves: "Hargreaves-Samani (sole temperature)",
+  penman_monteith: "Penman-Monteith FAO-56",
+  penman_monteith_rs_stimata: "Penman-Monteith (radiazione stimata)",
+};
+const SOURCE_LABELS = {
+  sensore_locale: "sensore locale",
+  servizio_meteo: "servizio meteo",
+  non_disponibile: "non disponibile",
+};
+
+/* I motivi arrivano dal motore come slug, a volte con valori in coda
+   (es. "vento_eccessivo_25kmh"): si traducono per prefisso. */
+function reasonLabel(reason) {
+  if (!reason) return "";
+  const exact = {
+    deficit_nullo: "terreno alla capacità di campo",
+    portata_non_configurata: "portata non configurata",
+    master_disattivo: "sistema in pausa",
+    zona_disabilitata: "zona disabilitata",
+    rischio_gelo: "rischio gelo",
+    giorno_escluso: "giorno escluso",
+    deficit_oltre_soglia: "deficit oltre soglia",
+    troncato_da_tetto_massimo: "troncato dal tetto massimo",
+  };
+  if (exact[reason]) return exact[reason];
+  if (reason.startsWith("sotto_soglia")) return "sotto soglia";
+  if (reason.startsWith("fuori_finestra")) return "fuori finestra";
+  if (reason.startsWith("vento_eccessivo")) return "vento eccessivo";
+  if (reason.startsWith("pioggia_prevista")) return "pioggia prevista";
+  return reason.replace(/_/g, " ");
+}
+
+/* Un blocco è diverso dal semplice "non serve acqua": va evidenziato. */
+const BLOCKING = [
+  "master_disattivo", "zona_disabilitata", "rischio_gelo", "giorno_escluso",
+  "fuori_finestra", "vento_eccessivo", "pioggia_prevista", "portata_non_configurata",
+];
+const isBlocked = (reason) =>
+  !!reason && BLOCKING.some((b) => reason.startsWith(b));
+
 const label = (map, key) => map[key] || key;
 const esc = (s) =>
   String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
@@ -213,10 +254,61 @@ class IrrigazioneSmartPanel extends HTMLElement {
     return `
       ${this._error ? `<ha-alert alert-type="error">${esc(this._error)}</ha-alert>` : ""}
       ${sys.master_enabled ? "" : `<ha-alert alert-type="warning">Il sistema è in pausa: nessuna zona verrà irrigata.</ha-alert>`}
+      ${this._meteoCard()}
       ${this._zonesCard()}
       ${this._systemCard(sys)}
       ${this._sensorsCard(sys)}
     `;
+  }
+
+  // ------------------------------------------------- bilancio giornaliero
+
+  _meteoCard() {
+    const m = this._overview.meteo || {};
+    const num = (v, unit, dec = 1) =>
+      v == null ? "—" : `${Number(v).toFixed(dec)}${unit ? " " + unit : ""}`;
+
+    const et0 = m.last_et0_mm;
+    const method = ET0_METHOD_LABELS[m.last_et0_method] || m.last_et0_method || "";
+    const when = m.last_update ? new Date(m.last_update) : null;
+    const hhmm = when
+      ? `${String(when.getHours()).padStart(2, "0")}:${String(when.getMinutes()).padStart(2, "0")}`
+      : "—";
+
+    return `<ha-card>
+      <div class="inner">
+        <div class="card-head">
+          <ha-icon icon="mdi:chart-bell-curve-cumulative"></ha-icon>
+          <h2>Bilancio idrico</h2>
+          <span class="spacer"></span>
+          <span class="sub">aggiornato ${hhmm}</span>
+        </div>
+
+        ${
+          et0 == null
+            ? `<ha-alert alert-type="info">
+                 Nessun giorno ancora chiuso. L'ET0 viene calcolato dopo la
+                 mezzanotte, sui dati accumulati nella giornata.
+               </ha-alert>`
+            : `<div class="et0">
+                 <div class="et0-value"><b>${Number(et0).toFixed(2)}</b> <span>mm</span></div>
+                 <div class="et0-meta">
+                   <span class="row-label">ET0 del ${esc(m.last_closed_date || "")}</span>
+                   <span class="sub">${esc(method)}</span>
+                 </div>
+               </div>`
+        }
+
+        <div class="form-section">Accumulo di oggi</div>
+        <div class="grid">
+          <div class="cell"><span class="k">T min</span><span class="v">${num(m.t_min, "°C")}</span></div>
+          <div class="cell"><span class="k">T max</span><span class="v">${num(m.t_max, "°C")}</span></div>
+          <div class="cell"><span class="k">Pioggia</span><span class="v">${num(m.rain_mm, "mm")}</span></div>
+          <div class="cell"><span class="k">Umidità media</span><span class="v">${num(m.rh_mean, "%", 0)}</span></div>
+          <div class="cell"><span class="k">Vento medio</span><span class="v">${num(m.wind_mean_kmh, "km/h")}</span></div>
+        </div>
+      </div>
+    </ha-card>`;
   }
 
   // ------------------------------------------------------------- zone
@@ -254,12 +346,12 @@ class IrrigazioneSmartPanel extends HTMLElement {
     const thrPct = taw > 0 ? Math.min(100, (threshold / taw) * 100) : 0;
 
     let status;
-    if (!z.enabled) {
-      status = `<span class="badge muted">disabilitata</span>`;
-    } else if (plan.should_run) {
+    if (plan.should_run) {
       status = `<span class="badge run">${plan.total_minutes} min · ${plan.cycles} ${plan.cycles > 1 ? "cicli" : "ciclo"}</span>`;
+    } else if (isBlocked(plan.reason)) {
+      status = `<span class="badge warn">${esc(reasonLabel(plan.reason))}</span>`;
     } else {
-      status = `<span class="badge ok">sotto soglia</span>`;
+      status = `<span class="badge ok">${esc(reasonLabel(plan.reason) || "sotto soglia")}</span>`;
     }
 
     const valve = z.valve_entity
@@ -353,9 +445,11 @@ class IrrigazioneSmartPanel extends HTMLElement {
 
   _sensorsCard(sys) {
     const hasWeather = !!sys.weather_entity;
+    const sources = (this._overview.meteo || {}).sources || {};
     const rows = SENSORS.map((s) => {
       const entityId = sys.sensors ? sys.sensors[s.key] : null;
       const live = this._liveState(entityId);
+      const origin = sources[s.key];
       let right;
       if (!entityId) {
         right = `<span class="badge muted">${hasWeather ? "Fallback meteo" : "Non configurato"}</span>`;
@@ -364,7 +458,17 @@ class IrrigazioneSmartPanel extends HTMLElement {
       } else {
         right = `<span class="reading" data-entity="${esc(entityId)}">${esc(live.value)}${live.unit ? " " + esc(live.unit) : ""}</span>`;
       }
-      const sub = entityId ? `<span class="sub">${esc((live && live.name) || entityId)}</span>` : "";
+      // La provenienza effettiva conta: se un sensore cade e il sistema
+      // ripiega sul meteo, deve vedersi.
+      const originTag =
+        origin && origin !== "non_disponibile"
+          ? ` · <span class="origin">${esc(label(SOURCE_LABELS, origin))}</span>`
+          : "";
+      const sub = entityId
+        ? `<span class="sub">${esc((live && live.name) || entityId)}${originTag}</span>`
+        : origin === "servizio_meteo"
+        ? `<span class="sub"><span class="origin">${esc(label(SOURCE_LABELS, origin))}</span></span>`
+        : "";
       return `<div class="row">
         <ha-icon icon="${s.icon}"></ha-icon>
         <div class="row-main"><span class="row-label">${s.label}</span>${sub}</div>
@@ -630,6 +734,17 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .bar-fill.over { background: var(--warning-color, #ffa600); }
       .bar-thr { position: absolute; top: -2px; width: 2px; height: 12px; background: var(--primary-text-color); opacity: .55; }
 
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 12px; margin-top: 10px; }
+      .cell { display: flex; flex-direction: column; gap: 2px; }
+      .cell .k { font-size: 11px; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: .03em; }
+      .cell .v { font-size: 18px; font-weight: 600; color: var(--primary-text-color); }
+
+      .et0 { display: flex; align-items: center; gap: 14px; padding: 4px 0 2px; }
+      .et0-value { font-size: 30px; font-weight: 600; color: var(--primary-text-color); line-height: 1; }
+      .et0-value span { font-size: 15px; font-weight: 400; color: var(--secondary-text-color); }
+      .et0-meta { display: flex; flex-direction: column; min-width: 0; }
+
+      .origin { color: var(--info-color, var(--primary-color)); }
       .muted { color: var(--secondary-text-color); }
       .small { font-size: 13px; }
       .note { margin: 12px 0 0; }

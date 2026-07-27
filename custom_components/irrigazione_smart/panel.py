@@ -35,7 +35,7 @@ from .hydro import (
     SOIL_PROPS,
     ZONE_PRESETS,
     TimeWindow,
-    build_run_plan,
+    evaluate_zone,
     resolve_zone_params,
     window_quality,
 )
@@ -68,15 +68,18 @@ def _entry_config(hass: HomeAssistant) -> dict[str, Any] | None:
     return dict(entries[0].data) if entries else None
 
 
-def _zone_computed(zone: dict[str, Any], system: dict[str, Any]) -> dict[str, Any]:
-    """Valori derivati di una zona, calcolati con il motore idrico."""
+def _zone_computed(
+    zone: dict[str, Any], system: dict[str, Any], wind_kmh: float = 0.0
+) -> dict[str, Any]:
+    """Valori derivati di una zona, calcolati con il motore idrico.
+
+    Si usa `evaluate_zone` e non direttamente `build_run_plan` così la
+    pagina mostra anche i blocchi (vento, pausa, zona disattivata) con lo
+    stesso criterio che userà l'esecuzione.
+    """
     params = resolve_zone_params(zone, system)
     deficit = float(zone.get("deficit_mm") or 0.0)
-    plan = build_run_plan(
-        deficit,
-        params,
-        soak_minutes=int(system.get("soak_minutes", 30) or 30),
-    )
+    plan = evaluate_zone(zone, system, deficit, wind_kmh=wind_kmh)
 
     return {
         "taw_mm": round(params.taw_mm, 1),
@@ -110,9 +113,13 @@ def _build_overview(hass: HomeAssistant) -> dict[str, Any]:
     if config is None or store is None:
         return {"configured": False, "system": None, "zones": [], "options": {}}
 
+    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
+    cdata = (coordinator.data if coordinator else None) or {}
+    wind_kmh = float(cdata.get("wind_kmh") or 0.0)
+
     system = store.system
     zones = [
-        {**zone, "computed": _zone_computed(zone, system)}
+        {**zone, "computed": _zone_computed(zone, system, wind_kmh)}
         for zone in store.zones_sorted()
     ]
 
@@ -144,11 +151,34 @@ def _build_overview(hass: HomeAssistant) -> dict[str, Any]:
             },
         },
         "zones": zones,
+        "meteo": _meteo_payload(cdata, store),
         "options": {
             "zone_types": sorted(ZONE_PRESETS),
             "soils": sorted(SOIL_PROPS),
             "emitters": sorted(EMITTER_EFFICIENCY),
         },
+    }
+
+
+def _meteo_payload(cdata: dict[str, Any], store: IrrigazioneStore) -> dict[str, Any]:
+    """Stato del bilancio: accumulo della giornata e ultimo ET0 calcolato."""
+    daily = cdata.get("daily") or store.daily or {}
+    live = cdata.get("live") or {}
+    rh_mean = daily["rh_sum"] / daily["rh_n"] if daily.get("rh_n") else None
+    wind_mean = daily["wind_sum"] / daily["wind_n"] if daily.get("wind_n") else None
+
+    return {
+        "date": daily.get("date"),
+        "t_min": daily.get("t_min"),
+        "t_max": daily.get("t_max"),
+        "rain_mm": daily.get("rain_mm"),
+        "rh_mean": round(rh_mean, 1) if rh_mean is not None else None,
+        "wind_mean_kmh": round(wind_mean * 3.6, 1) if wind_mean is not None else None,
+        "last_et0_mm": daily.get("last_et0_mm"),
+        "last_et0_method": daily.get("last_et0_method"),
+        "last_closed_date": daily.get("last_closed_date"),
+        "last_update": daily.get("last_update"),
+        "sources": live.get("sources") or {},
     }
 
 
@@ -234,14 +264,21 @@ class SystemView(HomeAssistantView):
         return self.json({"overview": _build_overview(hass)})
 
 
-async def async_setup_panel(hass: HomeAssistant) -> None:
-    """Registra risorsa statica, API e voce in sidebar (una volta sola)."""
+async def async_setup_store(hass: HomeAssistant) -> IrrigazioneStore:
+    """Carica lo storage una volta sola e lo condivide nel dominio."""
     domain_data = hass.data.setdefault(DOMAIN, {})
-
-    if _STORE not in domain_data:
+    store = domain_data.get(_STORE)
+    if store is None:
         store = IrrigazioneStore(hass)
         await store.async_load()
         domain_data[_STORE] = store
+    return store
+
+
+async def async_setup_panel(hass: HomeAssistant) -> None:
+    """Registra risorsa statica, API e voce in sidebar (una volta sola)."""
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    await async_setup_store(hass)
 
     if not domain_data.get(_HTTP_FLAG):
         www_dir = Path(__file__).parent / "www"

@@ -70,13 +70,33 @@ ZONE_RUNTIME: dict[str, Any] = {
     "last_duration_min": None,
 }
 
+# Accumulatori della giornata in corso. Persistiti perché un riavvio a
+# metà pomeriggio non deve far perdere la massima già registrata.
+DEFAULT_DAILY: dict[str, Any] = {
+    "date": None,
+    "t_min": None,
+    "t_max": None,
+    "rain_mm": 0.0,
+    "rh_sum": 0.0,
+    "rh_n": 0,
+    "wind_sum": 0.0,
+    "wind_n": 0,
+    "irr_sum": 0.0,
+    "irr_n": 0,
+    # esito dell'ultimo giorno chiuso
+    "last_et0_mm": None,
+    "last_et0_method": None,
+    "last_closed_date": None,
+    "last_update": None,
+}
+
 
 class IrrigazioneStore:
     """Wrapper sullo Store di Home Assistant con i default del dominio."""
 
     def __init__(self, hass: HomeAssistant) -> None:
         self._store: Store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
-        self._data: dict[str, Any] = {"system": {}, "zones": {}}
+        self._data: dict[str, Any] = {"system": {}, "zones": {}, "daily": {}}
 
     async def async_load(self) -> dict[str, Any]:
         """Carica da disco, completando i campi mancanti coi default."""
@@ -85,9 +105,14 @@ class IrrigazioneStore:
             self._data = {
                 "system": {**DEFAULT_SYSTEM, **(stored.get("system") or {})},
                 "zones": stored.get("zones") or {},
+                "daily": {**DEFAULT_DAILY, **(stored.get("daily") or {})},
             }
         else:
-            self._data = {"system": dict(DEFAULT_SYSTEM), "zones": {}}
+            self._data = {
+                "system": dict(DEFAULT_SYSTEM),
+                "zones": {},
+                "daily": dict(DEFAULT_DAILY),
+            }
         return self._data
 
     @property
@@ -101,6 +126,25 @@ class IrrigazioneStore:
     @property
     def zones(self) -> dict[str, Any]:
         return self._data["zones"]
+
+    @property
+    def daily(self) -> dict[str, Any]:
+        return self._data["daily"]
+
+    def async_save_daily(self, daily: dict[str, Any]) -> None:
+        """Sostituisce gli accumulatori giornalieri e persiste."""
+        self._data["daily"] = daily
+        self._save()
+
+    def async_set_deficit(self, zone_id: str, deficit_mm: float) -> None:
+        """Scrive il deficit calcolato dal coordinator.
+
+        È lo stato più prezioso del sistema: ogni aggiornamento va persistito.
+        """
+        zone = self._data["zones"].get(zone_id)
+        if zone is not None:
+            zone["deficit_mm"] = max(0.0, round(float(deficit_mm), 2))
+            self._save()
 
     def _save(self) -> None:
         """Salvataggio ritardato: raggruppa le scritture ravvicinate."""
