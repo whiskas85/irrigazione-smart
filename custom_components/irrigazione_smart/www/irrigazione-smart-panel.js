@@ -124,12 +124,22 @@ class IrrigazioneSmartPanel extends HTMLElement {
 
   connectedCallback() {
     // Master e linee sono entità: possono cambiare da automazioni o da
-    // un'altra dashboard. La pagina si riallinea da sola.
-    this._timer = setInterval(() => this._refreshSilent(), 30000);
+    // un'altra dashboard. La pagina si riallinea da sola, più spesso
+    // mentre l'irrigazione è in corso (la barra di progresso deve avanzare).
+    this._schedulePoll();
   }
 
   disconnectedCallback() {
-    clearInterval(this._timer);
+    clearTimeout(this._timer);
+  }
+
+  _schedulePoll() {
+    clearTimeout(this._timer);
+    const busy = !!(this._overview && (this._overview.running || {}).active);
+    this._timer = setTimeout(async () => {
+      await this._refreshSilent();
+      this._schedulePoll();
+    }, busy ? 3000 : 30000);
   }
 
   async _refreshSilent() {
@@ -271,6 +281,11 @@ class IrrigazioneSmartPanel extends HTMLElement {
     );
     onClick(".edit-system", () => this._openSystemDialog());
     onClick(".retry", () => this._fetchOverview());
+    onClick(".run-all", () => this._mutate("POST", "run", {}));
+    onClick(".stop-all", () => this._mutate("POST", "stop", {}));
+    onClick(".run-zone", (e) =>
+      this._openForceDialog(e.currentTarget.getAttribute("data-id"))
+    );
 
     // master generale
     const master = sr.querySelector("[data-master]");
@@ -322,16 +337,54 @@ class IrrigazioneSmartPanel extends HTMLElement {
     const running = zones.filter((z) => (z.computed || {}).plan?.should_run);
 
     return `
+      ${this._runningCard()}
       ${this._masterCard(sys, zones, running, sched)}
       ${this._linesCard(zones)}
       ${this._sequenceCard(sched, sys)}
     `;
   }
 
+  /* Mostrata solo mentre l'irrigazione è davvero in corso: la barra
+     avanza sul tempo della linea corrente. */
+  _runningCard() {
+    const r = this._overview.running || {};
+    if (!r.active) return "";
+
+    const phase = {
+      irrigazione: "in irrigazione",
+      assorbimento: "pausa di assorbimento",
+      pausa_tra_linee: "pausa tra le linee",
+    }[r.phase] || r.phase || "";
+
+    const pct = Number(r.progress || 0);
+    return `<ha-card class="running"><div class="inner">
+      <div class="master-row">
+        <div class="master-icon on pulse"><ha-icon icon="mdi:sprinkler-variant"></ha-icon></div>
+        <div class="master-main">
+          <span class="master-title">${esc(r.zone_name || "Irrigazione in corso")}</span>
+          <span class="sub">${esc(phase)}${
+            r.cycles > 1 ? ` · ciclo ${r.cycle}/${r.cycles}` : ""
+          }</span>
+        </div>
+        ${this._button("stop-all", "Ferma", { danger: true })}
+      </div>
+      ${
+        r.phase === "irrigazione"
+          ? `<div class="bar big"><div class="bar-fill" style="width:${pct}%"></div></div>
+             <div class="zone-meta">
+               <span>${r.elapsed_min ?? 0} di ${r.zone_total_min ?? 0} min</span>
+               <span class="spacer"></span><span class="muted">${pct}%</span>
+             </div>`
+          : ""
+      }
+    </div></ha-card>`;
+  }
+
   _masterCard(sys, zones, running, sched) {
     const on = !!sys.master_enabled;
     const w = sys.window || {};
     const enabled = zones.filter((z) => z.enabled).length;
+    const busy = !!(this._overview.running || {}).active;
 
     return `<ha-card><div class="inner">
         <div class="master-row">
@@ -353,7 +406,31 @@ class IrrigazioneSmartPanel extends HTMLElement {
           <div class="cell"><span class="k">Chiedono acqua</span><span class="v">${running.length}</span></div>
           <div class="cell"><span class="k">Tempo totale</span><span class="v">${sched.total_minutes || 0}<span class="of"> min</span></span></div>
         </div>
+        ${this._flowRow()}
+        ${
+          on && !busy
+            ? `<div class="actions">${this._button("run-all", "Avvia irrigazione ora", { primary: true })}</div>`
+            : ""
+        }
       </div></ha-card>`;
+  }
+
+  /* Flussostato: sola lettura, come richiesto. Non blocca nulla. */
+  _flowRow() {
+    const f = this._overview.flow || {};
+    if (!f.configured) return "";
+    return `<div class="row">
+      <ha-icon icon="mdi:waves-arrow-right"></ha-icon>
+      <div class="row-main">
+        <span class="row-label">Flusso</span>
+        <span class="sub">${esc(f.name || f.entity_id)} · solo lettura</span>
+      </div>
+      ${
+        f.available
+          ? `<span class="reading" data-entity="${esc(f.entity_id)}">${esc(f.value)}${f.unit ? " " + esc(f.unit) : ""}</span>`
+          : `<span class="badge warn">non disponibile</span>`
+      }
+    </div>`;
   }
 
   _linesCard(zones) {
@@ -381,13 +458,21 @@ class IrrigazioneSmartPanel extends HTMLElement {
       }
       const deficit = Number(z.deficit_mm || 0);
       const thr = Number(c.trigger_threshold_mm || 0);
+      const busy = !!(this._overview.running || {}).active;
       return `<div class="row line${z.enabled ? "" : " dim"}">
         <ha-icon icon="mdi:pipe-valve"></ha-icon>
         <div class="row-main">
           <span class="row-label">${esc(z.name)}</span>
-          <span class="sub">${deficit.toFixed(1)} / ${thr.toFixed(1)} mm</span>
+          <span class="sub">${deficit.toFixed(1)} / ${thr.toFixed(1)} mm${this._lastRunText(z)}</span>
         </div>
         ${state}
+        ${
+          z.enabled && !busy
+            ? `<ha-icon-button class="run-zone" data-id="${z.id}" label="Irriga ora" title="Irriga ora">
+                 <ha-icon icon="mdi:play-circle-outline"></ha-icon>
+               </ha-icon-button>`
+            : ""
+        }
         <ha-switch data-zone-toggle="${z.id}" ${z.enabled ? "checked" : ""}></ha-switch>
       </div>`;
     }).join("");
@@ -399,6 +484,18 @@ class IrrigazioneSmartPanel extends HTMLElement {
       <p class="muted small nomargin">Ogni interruttore abilita o esclude la singola linea.</p>
       ${rows}
     </div></ha-card>`;
+  }
+
+  /* Ultima irrigazione: le forzature si segnalano ma restano secondarie
+     rispetto a quelle automatiche. */
+  _lastRunText(z) {
+    if (!z.last_irrigation) return "";
+    const d = new Date(z.last_irrigation);
+    if (isNaN(d)) return "";
+    const two = (n) => String(n).padStart(2, "0");
+    const when = `${two(d.getDate())}/${two(d.getMonth() + 1)} ${two(d.getHours())}:${two(d.getMinutes())}`;
+    const forced = z.last_trigger === "forzata" ? " (forzata)" : "";
+    return ` · ultima ${when}${forced}`;
   }
 
   _sequenceCard(sched, sys) {
@@ -811,6 +908,35 @@ class IrrigazioneSmartPanel extends HTMLElement {
     });
   }
 
+  /* Forzatura di una linea: durata precompilata con quella calcolata, ma
+     modificabile. Il campo vuoto lascia decidere al bilancio idrico. */
+  _openForceDialog(zoneId) {
+    const zone = (this._overview.zones || []).find((z) => z.id === zoneId);
+    if (!zone) return;
+    const plan = (zone.computed || {}).plan || {};
+    const suggested = plan.should_run ? plan.total_minutes : 10;
+
+    const content = `<div class="form">
+      <p class="nomargin">Irrigazione forzata di <b>${esc(zone.name)}</b>.</p>
+      ${this._field("minuti", "Durata", suggested, {
+        type: "number", suffix: "min",
+        helper: "Svuota il campo per usare la durata calcolata dal deficit",
+      })}
+      ${
+        zone.valve_entity
+          ? `<p class="muted small nomargin">Valvola: ${esc(zone.valve_entity)}. L'irrigazione parte solo se la valvola conferma l'apertura.</p>`
+          : `<p class="warntext small nomargin">Questa linea non ha una valvola configurata: non partirà.</p>`
+      }
+    </div>`;
+
+    this._showDialog("Irriga ora", content, async (dlg) => {
+      const data = this._collect(dlg, { numbers: ["minuti"], booleans: [] });
+      const body = { zone_id: zoneId };
+      if (data.minuti) body.minuti = data.minuti;
+      await this._mutate("POST", "run", body);
+    });
+  }
+
   _openSystemDialog() {
     const sys = this._overview.system;
     const opts = this._overview.options || {};
@@ -994,6 +1120,11 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .badge.q-accettabile { background: color-mix(in srgb, var(--warning-color, #ffa600) 20%, transparent); color: var(--warning-color, #ffa600); }
       .badge.q-sconsigliata { background: color-mix(in srgb, var(--error-color, #db4437) 18%, transparent); color: var(--error-color, #db4437); }
       .warntext { color: var(--warning-color, #ffa600); }
+      .actions { display: flex; gap: 8px; margin-top: 14px; }
+      /* pulsazione mentre l'acqua scorre davvero */
+      .master-icon.pulse { animation: pulse 1.6s ease-in-out infinite; }
+      @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+      @media (prefers-reduced-motion: reduce) { .master-icon.pulse { animation: none; } }
 
       .zone { padding: 14px 0; border-bottom: 1px solid var(--divider-color); }
       .zone:last-child { border-bottom: none; padding-bottom: 0; }

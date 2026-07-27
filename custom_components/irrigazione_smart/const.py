@@ -32,3 +32,20 @@ PLATFORMS: Final[list[Platform]] = [Platform.SWITCH, Platform.SENSOR]
 # aggiunte e rimosse a caldo senza riavviare Home Assistant.
 SIGNAL_ZONES_CHANGED: Final = f"{DOMAIN}_zones_changed"
 SIGNAL_STATE_CHANGED: Final = f"{DOMAIN}_state_changed"
+
+# Secondi di attesa per la conferma di apertura della valvola. Non si
+# assume mai che una linea stia irrigando solo perché è stato dato il
+# comando: senza conferma la linea viene saltata.
+VALVE_CONFIRM_TIMEOUT: Final = 30
+
+# Eventi sul bus di Home Assistant, richiamabili anche da fuori
+# dall'integration (automazioni, script, altre integrazioni).
+EVENT_STARTED: Final = f"{DOMAIN}_started"
+EVENT_FINISHED: Final = f"{DOMAIN}_finished"
+EVENT_ZONE_STARTED: Final = f"{DOMAIN}_zone_started"
+EVENT_ZONE_FINISHED: Final = f"{DOMAIN}_zone_finished"
+
+# Servizi
+SERVICE_RUN_ZONE: Final = "irriga_linea"
+SERVICE_RUN_ALL: Final = "avvia_sequenza"
+SERVICE_STOP: Final = "ferma"

@@ -9,7 +9,9 @@ from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN, PLATFORMS
 from .coordinator import IrrigazioneCoordinator
+from .executor import IrrigationExecutor
 from .panel import async_remove_panel, async_setup_panel, async_setup_store
+from .services import async_setup_services
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -23,6 +25,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = IrrigazioneCoordinator(hass, entry, store)
     await coordinator.async_config_entry_first_refresh()
     hass.data[DOMAIN]["coordinator"] = coordinator
+    hass.data[DOMAIN]["executor"] = IrrigationExecutor(hass, store)
+
+    await async_setup_services(hass)
 
     if PLATFORMS:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -42,6 +47,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if unloaded:
         await async_remove_panel(hass)
+        executor = hass.data[DOMAIN].pop("executor", None)
+        if executor is not None:
+            await executor.async_stop()
         hass.data[DOMAIN].pop("coordinator", None)
         hass.data[DOMAIN].pop(entry.entry_id, None)
     return unloaded

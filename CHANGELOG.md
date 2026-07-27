@@ -8,6 +8,28 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Aggiunto
+- **Esecuzione dell'irrigazione** (`executor.py`): apre le valvole, rispetta
+  cicli e pause di assorbimento, aggiorna il deficit con l'acqua realmente
+  erogata e registra data e durata dell'ultima irrigazione
+- **Conferma di apertura della valvola**: non si assume mai che una linea
+  stia irrigando solo perché è stato dato il comando. Dopo il comando si
+  attende la conferma di stato; se non arriva entro il timeout la linea
+  viene **saltata e la sequenza prosegue**, lasciando il deficit a bilancio
+  perché venga recuperato
+- Servizi: `irrigazione_smart.irriga_linea` (con durata fissa opzionale,
+  attiva solo se la linea è abilitata), `avvia_sequenza`, `ferma`
+- Eventi sul bus di Home Assistant, richiamabili da automazioni esterne:
+  `irrigazione_smart_started`, `_finished`, `_zone_started`, `_zone_finished`,
+  con nome linea, minuti, acqua erogata, flusso e prossima linea
+- Dalla pagina: avvio dell'intera sequenza, forzatura della singola linea
+  con durata modificabile, e interruzione immediata
+- Barra di progresso durante l'irrigazione, con ciclo corrente e fase
+  (irrigazione, assorbimento, pausa tra le linee)
+- Data dell'ultima irrigazione per ogni linea, con le forzature segnalate
+- **Flussostato** configurabile, di **sola lettura**: mostrato in pagina e
+  incluso negli eventi, non blocca né interrompe mai l'irrigazione
+
 ### Corretto
 - Il pulsante **Aggiungi zona** era invisibile: usava `mwc-button`, che nelle
   versioni recenti del frontend non è registrato. Lo stesso problema

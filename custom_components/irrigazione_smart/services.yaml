@@ -1,0 +1,39 @@
+irriga_linea:
+  name: Irriga linea
+  description: >-
+    Forza l'irrigazione di una singola linea. Funziona solo se la linea è
+    abilitata. Senza il campo minuti usa la durata calcolata dal bilancio
+    idrico.
+  fields:
+    zone_id:
+      name: Linea
+      description: Identificativo della linea da irrigare.
+      required: true
+      example: 01HXYZ2K8M4N6P8Q
+      selector:
+        text:
+    minuti:
+      name: Minuti
+      description: >-
+        Durata fissa in minuti. Se omesso, la durata viene calcolata dal
+        deficit idrico della linea.
+      required: false
+      example: 15
+      selector:
+        number:
+          min: 1
+          max: 600
+          unit_of_measurement: min
+          mode: box
+
+avvia_sequenza:
+  name: Avvia sequenza
+  description: >-
+    Avvia l'irrigazione di tutte le linee che richiedono acqua, in ordine,
+    rispettando cicli e pause di assorbimento.
+
+ferma:
+  name: Ferma irrigazione
+  description: >-
+    Interrompe l'irrigazione in corso e chiude la valvola aperta. L'acqua
+    già erogata viene comunque scalata dal deficit.

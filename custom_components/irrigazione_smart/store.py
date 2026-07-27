@@ -39,6 +39,9 @@ DEFAULT_SYSTEM: dict[str, Any] = {
     "excluded_days": [],
     "sequential": True,
     "max_concurrent": 1,
+    # Flussostato: informativo, non blocca mai l'irrigazione
+    "flow_entity": None,
+    "valve_timeout_s": 30,
 }
 
 # Campi accettati su una zona, con il valore usato quando non arrivano.
@@ -68,6 +71,8 @@ ZONE_RUNTIME: dict[str, Any] = {
     "deficit_mm": 0.0,
     "last_irrigation": None,
     "last_duration_min": None,
+    # "automatica" o "forzata": le forzature si segnalano ma contano meno
+    "last_trigger": None,
 }
 
 # Accumulatori della giornata in corso. Persistiti perché un riavvio a
@@ -134,6 +139,20 @@ class IrrigazioneStore:
     def async_save_daily(self, daily: dict[str, Any]) -> None:
         """Sostituisce gli accumulatori giornalieri e persiste."""
         self._data["daily"] = daily
+        self._save()
+
+    def async_set_runtime(self, zone_id: str, **fields: Any) -> None:
+        """Scrive lo stato runtime di una zona (ultima irrigazione, durata).
+
+        Separato da `async_update_zone`, che accetta solo i campi del form:
+        senza questo metodo i campi runtime verrebbero scartati.
+        """
+        zone = self._data["zones"].get(zone_id)
+        if zone is None:
+            return
+        for key, value in fields.items():
+            if key in ZONE_RUNTIME:
+                zone[key] = value
         self._save()
 
     def async_set_deficit(self, zone_id: str, deficit_mm: float) -> None:

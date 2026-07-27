@@ -45,6 +45,7 @@ from .hydro import (
     schedule_sequence,
     window_quality,
 )
+from .executor import get_executor
 from .store import IrrigazioneStore
 
 PANEL_URL_PATH = "irrigazione-smart"
@@ -175,6 +176,8 @@ def _build_overview(hass: HomeAssistant) -> dict[str, Any]:
             },
         },
         "zones": zones,
+        "running": executor.status() if (executor := get_executor(hass)) else {"active": False},
+        "flow": _flow_payload(hass, system),
         "schedule": _schedule_payload(plans, window, system),
         "meteo": _meteo_payload(cdata, store),
         "options": {
@@ -182,6 +185,26 @@ def _build_overview(hass: HomeAssistant) -> dict[str, Any]:
             "soils": sorted(SOIL_PROPS),
             "emitters": sorted(EMITTER_EFFICIENCY),
         },
+    }
+
+
+def _flow_payload(hass: HomeAssistant, system: dict[str, Any]) -> dict[str, Any]:
+    """Lettura del flussostato. Di sola lettura: non blocca l'irrigazione."""
+    entity_id = system.get("flow_entity")
+    if not entity_id:
+        return {"configured": False}
+
+    state = hass.states.get(entity_id)
+    if state is None or state.state in ("unknown", "unavailable"):
+        return {"configured": True, "entity_id": entity_id, "available": False}
+
+    return {
+        "configured": True,
+        "entity_id": entity_id,
+        "available": True,
+        "value": state.state,
+        "unit": state.attributes.get("unit_of_measurement", ""),
+        "name": state.attributes.get("friendly_name", entity_id),
     }
 
 
@@ -308,6 +331,54 @@ class ZoneDetailView(HomeAssistantView):
         return self.json({"overview": _build_overview(hass)})
 
 
+class RunView(HomeAssistantView):
+    """Avvio forzato: una linea o l'intera sequenza."""
+
+    url = "/api/irrigazione_smart/run"
+    name = "api:irrigazione_smart:run"
+    requires_auth = True
+
+    async def post(self, request):
+        _require_admin(request)
+        hass: HomeAssistant = request.app["hass"]
+        store = _get_store(hass)
+        executor = get_executor(hass)
+        if store is None or executor is None:
+            return self.json_message("Integration non configurata", 400)
+
+        payload = await request.json()
+        zone_id = payload.get("zone_id")
+
+        if zone_id:
+            zone = store.zones.get(zone_id)
+            if zone is None:
+                return self.json_message("Zona non trovata", 404)
+            # la forzatura rispetta il master di linea
+            if not zone.get("enabled"):
+                return self.json_message("La linea è disattivata", 400)
+            await executor.async_run_zone(zone_id, payload.get("minuti"))
+        else:
+            await executor.async_start_sequence()
+
+        return self.json({"overview": _build_overview(hass)})
+
+
+class StopView(HomeAssistantView):
+    """Interruzione immediata dell'irrigazione in corso."""
+
+    url = "/api/irrigazione_smart/stop"
+    name = "api:irrigazione_smart:stop"
+    requires_auth = True
+
+    async def post(self, request):
+        _require_admin(request)
+        hass: HomeAssistant = request.app["hass"]
+        executor = get_executor(hass)
+        if executor is not None:
+            await executor.async_stop()
+        return self.json({"overview": _build_overview(hass)})
+
+
 class SystemView(HomeAssistantView):
     """Modifica delle impostazioni di sistema."""
 
@@ -353,6 +424,8 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
         hass.http.register_view(ZonesView())
         hass.http.register_view(ZoneDetailView())
         hass.http.register_view(SystemView())
+        hass.http.register_view(RunView())
+        hass.http.register_view(StopView())
         domain_data[_HTTP_FLAG] = True
 
     if not domain_data.get(_PANEL_FLAG):
