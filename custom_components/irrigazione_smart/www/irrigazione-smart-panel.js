@@ -52,6 +52,12 @@ const SOURCE_LABELS = {
 const INHERIT_NUM = -1;
 const INHERIT_STR = "eredita";
 
+/* Non tutte le versioni del frontend registrano gli stessi componenti
+   (`mwc-button` e `mwc-list-item` mancano nelle più recenti). Si verifica
+   a runtime cosa esiste davvero: se manca, si usa un controllo HTML
+   equivalente stilizzato col tema, così la pagina resta sempre usabile. */
+const has = (tag) => !!customElements.get(tag);
+
 const label = (map, key) => map[key] || key;
 const esc = (s) =>
   String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
@@ -289,7 +295,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
     }
     if (this._error && !this._overview) {
       return `<ha-alert alert-type="error" title="Errore">${esc(this._error)}</ha-alert>
-              <mwc-button class="retry" raised label="Riprova"></mwc-button>`;
+              ${this._button("retry", "Riprova", { primary: true })}`;
     }
     if (!this._overview || !this._overview.configured) {
       return `<ha-alert alert-type="info" title="Non ancora configurata">
@@ -457,6 +463,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
            <ha-icon icon="mdi:sprinkler-variant"></ha-icon>
            <p>Nessuna zona configurata.</p>
            <p class="muted small">Aggiungi la prima zona per iniziare a calcolare il bilancio idrico.</p>
+           <div class="empty-cta">${this._button("add-zone", "Aggiungi zona", { primary: true })}</div>
          </div>`;
 
     return `<ha-card><div class="inner">
@@ -464,7 +471,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
           <ha-icon icon="mdi:sprinkler"></ha-icon>
           <h2>Zone e linee</h2>
           <span class="spacer"></span>
-          <mwc-button class="add-zone" label="Aggiungi zona"></mwc-button>
+          ${this._button("add-zone", "Aggiungi zona", { primary: true })}
         </div>
         ${body}
       </div></ha-card>
@@ -544,7 +551,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
           <ha-icon icon="mdi:cog-outline"></ha-icon>
           <h2>Impostazioni sistema</h2>
           <span class="spacer"></span>
-          <mwc-button class="edit-system" label="Modifica"></mwc-button>
+          ${this._button("edit-system", "Modifica")}
         </div>
         <div class="row">
           <ha-icon icon="${qIcon}"></ha-icon>
@@ -682,25 +689,70 @@ class IrrigazioneSmartPanel extends HTMLElement {
 
   // ------------------------------------------------------------- dialoghi
 
+  /* Pulsante: `ha-button` se c'è, altrimenti un <button> stilizzato.
+     Mai `mwc-button` da solo: sulle versioni recenti non è registrato e
+     resterebbe invisibile. */
+  _button(cls, text, opts = {}) {
+    const { primary = false, danger = false, slot = "" } = opts;
+    const slotAttr = slot ? ` slot="${slot}"` : "";
+    const kind = `${primary ? " primary" : ""}${danger ? " danger" : ""}`;
+    if (has("ha-button")) {
+      return `<ha-button class="${cls}"${slotAttr}${primary ? " raised" : ""}${
+        danger ? ' class="danger"' : ""
+      }>${esc(text)}</ha-button>`;
+    }
+    return `<button type="button" class="btn${kind} ${cls}"${slotAttr}>${esc(text)}</button>`;
+  }
+
   _field(field, labelText, value, opts = {}) {
     const { type = "text", suffix = "", helper = "" } = opts;
-    return `<ha-textfield
-      data-field="${field}" label="${labelText}" type="${type}"
-      ${type === "number" ? 'step="any"' : ""}
-      value="${value == null ? "" : esc(value)}"
-      ${suffix ? `suffix="${suffix}"` : ""}
-      ${helper ? `helper="${esc(helper)}" helperPersistent` : ""}
-    ></ha-textfield>`;
+    const val = value == null ? "" : esc(value);
+    if (has("ha-textfield")) {
+      return `<ha-textfield
+        data-field="${field}" label="${esc(labelText)}" type="${type}"
+        ${type === "number" ? 'step="any"' : ""}
+        value="${val}"
+        ${suffix ? `suffix="${esc(suffix)}"` : ""}
+        ${helper ? `helper="${esc(helper)}" helperPersistent` : ""}
+      ></ha-textfield>`;
+    }
+    return `<div class="fld">
+      <span class="fld-label">${esc(labelText)}${suffix ? ` (${esc(suffix)})` : ""}</span>
+      <input class="native" data-field="${field}" type="${type}"
+             ${type === "number" ? 'step="any"' : ""} value="${val}">
+      ${helper ? `<span class="fld-helper">${esc(helper)}</span>` : ""}
+    </div>`;
   }
 
   _select(field, labelText, options, current, labels) {
-    const items = options
+    const text = (o) => esc(labels ? label(labels, o) : o);
+    // ha-select ha bisogno delle sue voci di lista: si usa solo se sono
+    // disponibili, altrimenti una <select> nativa (sempre funzionante).
+    const itemTag = has("ha-list-item")
+      ? "ha-list-item"
+      : has("mwc-list-item")
+      ? "mwc-list-item"
+      : null;
+
+    if (has("ha-select") && itemTag) {
+      const items = options
+        .map(
+          (o) =>
+            `<${itemTag} value="${esc(o)}"${o === current ? " selected" : ""}>${text(o)}</${itemTag}>`
+        )
+        .join("");
+      return `<ha-select data-field="${field}" label="${esc(labelText)}" fixedMenuPosition naturalMenuWidth>${items}</ha-select>`;
+    }
+
+    const opts = options
       .map(
-        (o) =>
-          `<mwc-list-item value="${esc(o)}"${o === current ? " selected" : ""}>${esc(labels ? label(labels, o) : o)}</mwc-list-item>`
+        (o) => `<option value="${esc(o)}"${o === current ? " selected" : ""}>${text(o)}</option>`
       )
       .join("");
-    return `<ha-select data-field="${field}" label="${labelText}" fixedMenuPosition naturalMenuWidth>${items}</ha-select>`;
+    return `<div class="fld">
+      <span class="fld-label">${esc(labelText)}</span>
+      <select class="native" data-field="${field}">${opts}</select>
+    </div>`;
   }
 
   _openZoneDialog(zoneId) {
@@ -807,26 +859,63 @@ class IrrigazioneSmartPanel extends HTMLElement {
     return out;
   }
 
+  /* Crea il contenitore del dialogo: ha-dialog se registrato, altrimenti
+     un overlay equivalente. Espone la stessa interfaccia (querySelector +
+     evento "closed"), così il codice chiamante non cambia. */
+  _makeDialog(heading) {
+    if (has("ha-dialog")) {
+      const dlg = document.createElement("ha-dialog");
+      dlg.heading = heading;
+      dlg.setAttribute("open", "");
+      return dlg;
+    }
+    const dlg = document.createElement("div");
+    dlg.className = "dlg-fallback";
+    dlg._isFallback = true;
+    dlg.addEventListener("click", (e) => {
+      if (e.target === dlg) dlg.dispatchEvent(new CustomEvent("closed"));
+    });
+    dlg._heading = heading;
+    return dlg;
+  }
+
+  /* Nel fallback i pulsanti hanno slot="…" ma nessuno slot reale: si
+     raccolgono in una barra azioni in fondo al riquadro. */
+  _layoutFallback(dlg) {
+    if (!dlg._isFallback) return;
+    const box = document.createElement("div");
+    box.className = "dlg-box";
+    box.innerHTML = `<h3>${esc(dlg._heading)}</h3>`;
+    const actions = document.createElement("div");
+    actions.className = "dlg-actions";
+    [...dlg.childNodes].forEach((node) => {
+      if (node.nodeType === 1 && node.getAttribute("slot")) actions.appendChild(node);
+      else box.appendChild(node);
+    });
+    box.appendChild(actions);
+    dlg.appendChild(box);
+  }
+
   _showDialog(heading, contentHtml, onSave) {
-    const dlg = document.createElement("ha-dialog");
-    dlg.heading = heading;
-    dlg.setAttribute("open", "");
+    const dlg = this._makeDialog(heading);
     dlg.innerHTML = `
       ${contentHtml}
-      <mwc-button slot="secondaryAction" dialogAction="cancel" label="Annulla"></mwc-button>
-      <mwc-button slot="primaryAction" class="save" label="Salva"></mwc-button>
+      ${this._button("cancel", "Annulla", { slot: "secondaryAction" })}
+      ${this._button("save", "Salva", { primary: true, slot: "primaryAction" })}
     `;
     const close = () => dlg.parentNode && dlg.parentNode.removeChild(dlg);
     dlg.addEventListener("closed", close);
+    dlg.querySelector(".cancel").addEventListener("click", close);
     dlg.querySelector(".save").addEventListener("click", async () => {
       await onSave(dlg);
       close();
     });
+    this._layoutFallback(dlg);
     this.shadowRoot.appendChild(dlg);
     // I valori delle ha-select vanno impostati dopo l'upgrade del componente.
     requestAnimationFrame(() => {
       dlg.querySelectorAll("ha-select").forEach((sel) => {
-        const sl = sel.querySelector("mwc-list-item[selected]");
+        const sl = sel.querySelector("[selected][value]");
         if (sl) sel.value = sl.getAttribute("value");
       });
     });
@@ -835,20 +924,20 @@ class IrrigazioneSmartPanel extends HTMLElement {
   _confirmDelete(zoneId) {
     const zone = (this._overview.zones || []).find((z) => z.id === zoneId);
     if (!zone) return;
-    const dlg = document.createElement("ha-dialog");
-    dlg.heading = "Eliminare la zona?";
-    dlg.setAttribute("open", "");
+    const dlg = this._makeDialog("Eliminare la zona?");
     dlg.innerHTML = `
       <p>La zona <b>${esc(zone.name)}</b> verrà rimossa insieme alla sua storia idrica (deficit ${Number(zone.deficit_mm || 0).toFixed(1)} mm). L'operazione non è reversibile.</p>
-      <mwc-button slot="secondaryAction" dialogAction="cancel" label="Annulla"></mwc-button>
-      <mwc-button slot="primaryAction" class="confirm danger" label="Elimina"></mwc-button>
+      ${this._button("cancel", "Annulla", { slot: "secondaryAction" })}
+      ${this._button("confirm", "Elimina", { primary: true, danger: true, slot: "primaryAction" })}
     `;
     const close = () => dlg.parentNode && dlg.parentNode.removeChild(dlg);
     dlg.addEventListener("closed", close);
+    dlg.querySelector(".cancel").addEventListener("click", close);
     dlg.querySelector(".confirm").addEventListener("click", async () => {
       await this._mutate("DELETE", `zones/${zoneId}`);
       close();
     });
+    this._layoutFallback(dlg);
     this.shadowRoot.appendChild(dlg);
   }
 
@@ -949,8 +1038,34 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .empty-state ha-icon { --mdc-icon-size: 40px; color: var(--disabled-text-color); }
       .empty-state p { margin: 6px 0; }
 
+      /* pulsanti di riserva, quando ha-button/mwc-button non esistono */
+      .btn { font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer;
+             padding: 8px 16px; border-radius: 6px; border: 1px solid var(--divider-color);
+             background: none; color: var(--primary-color); }
+      .btn:hover { background: color-mix(in srgb, var(--primary-color) 10%, transparent); }
+      .btn.primary { background: var(--primary-color); color: var(--text-primary-color, #fff); border-color: transparent; }
+      .btn.primary:hover { filter: brightness(1.08); }
+      .btn.danger { background: var(--error-color, #db4437); color: #fff; border-color: transparent; }
+      .empty-cta { margin-top: 14px; }
+
+      /* campi di riserva, quando ha-textfield/ha-select non esistono */
+      .fld { display: flex; flex-direction: column; gap: 4px; }
+      .fld-label { font-size: 12px; color: var(--secondary-text-color); }
+      .fld-helper { font-size: 11px; color: var(--secondary-text-color); }
+      .native { font-family: inherit; font-size: 14px; padding: 10px; border-radius: 6px;
+                border: 1px solid var(--divider-color); background: var(--secondary-background-color);
+                color: var(--primary-text-color); width: 100%; box-sizing: border-box; }
+
       .form { display: flex; flex-direction: column; gap: 14px; min-width: 300px; }
       .form ha-textfield, .form ha-select { width: 100%; }
+      /* fallback dialogo: usato solo se ha-dialog non è registrato */
+      .dlg-fallback { position: fixed; inset: 0; z-index: 99; display: flex;
+                      align-items: center; justify-content: center; background: rgba(0,0,0,.45); }
+      .dlg-box { background: var(--card-background-color); color: var(--primary-text-color);
+                 border-radius: 12px; padding: 20px; max-height: 85vh; overflow: auto;
+                 max-width: 92vw; box-shadow: 0 8px 32px rgba(0,0,0,.3); }
+      .dlg-box h3 { margin: 0 0 14px; font-size: 18px; }
+      .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
       .form-section { font-size: 13px; font-weight: 600; color: var(--secondary-text-color);
                       text-transform: uppercase; letter-spacing: .04em; margin-top: 6px; }
       .danger { --mdc-theme-primary: var(--error-color, #db4437); }

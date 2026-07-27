@@ -8,6 +8,18 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Corretto
+- Il pulsante **Aggiungi zona** era invisibile: usava `mwc-button`, che nelle
+  versioni recenti del frontend non è registrato. Lo stesso problema
+  rendeva invisibili i pulsanti *Salva* e *Annulla* dei dialoghi, quindi
+  non era possibile creare una zona in nessun modo
+- I componenti dei form ora vengono rilevati a runtime: si usano quelli
+  nativi di Home Assistant se presenti, altrimenti controlli HTML
+  equivalenti stilizzati col tema. La pagina resta usabile su qualunque
+  versione del frontend
+- Aggiunto il pulsante *Aggiungi zona* anche nello stato vuoto, dove serve
+  di più
+
 ### Aggiunto
 - **Pannello diviso in schede**: *Dashboard* (master, stato delle linee,
   sequenza della notte), *Zone* (gestione completa delle linee e
