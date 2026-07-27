@@ -9,6 +9,21 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 ## [Unreleased]
 
 ### Aggiunto
+- **Gestione zone dal pannello**: creazione, modifica ed eliminazione delle
+  zone direttamente dalla pagina, senza riavviare. Le zone sono persistite
+  in `.storage/irrigazione_smart.zones` con salvataggio debounced (`store.py`,
+  vedi SPEC.md §3); l'id è un ULID, così rinominare una zona non rompe nulla
+- Ogni zona mostra i valori calcolati da `hydro.py`: deficit sulla barra del
+  bilancio idrico con la tacca della soglia, TAW, e il piano di irrigazione
+  (minuti, cicli, pause di assorbimento, millimetri lordi, avviso di
+  troncamento dal tetto massimo)
+- Form di zona con ereditarietà a tre livelli: i campi override lasciati
+  vuoti ereditano dal preset o dal sistema
+- Impostazioni di sistema modificabili dal pannello: finestra oraria con
+  valutazione agronomica, terreno predefinito, pause, soglie di vento e
+  pioggia prevista, politica di overflow, pausa generale
+- API REST interne per il pannello: `overview`, `zones`, `zones/{id}`,
+  `system`. Le modifiche richiedono un utente amministratore
 - Pagina dedicata nella barra laterale ("Irrigazione"): mostra la posizione
   configurata, le sorgenti dati meteo con i valori live dei sensori e la
   sezione Zone (per ora vuota). Prima interfaccia visibile dell'integration.

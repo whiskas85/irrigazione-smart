@@ -1,0 +1,166 @@
+"""Persistenza delle zone e delle impostazioni di sistema.
+
+Le zone si creano a runtime dal pannello, quindi non vivono nella config
+entry ma in `.storage` (vedi SPEC.md §3). I salvataggi sono debounced:
+il deficit si aggiorna spesso e la SD di un Raspberry Pi non va martellata.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
+
+from .const import STORAGE_KEY, STORAGE_SAVE_DELAY, STORAGE_VERSION
+
+try:  # disponibile nelle versioni recenti di Home Assistant
+    from homeassistant.util.ulid import ulid_now
+except ImportError:  # pragma: no cover - fallback difensivo
+    from uuid import uuid4
+
+    def ulid_now() -> str:
+        """Fallback: identificativo opaco quando l'helper ULID manca."""
+        return uuid4().hex.upper()
+
+
+# Default di sistema, allineati a SPEC.md §3.
+DEFAULT_SYSTEM: dict[str, Any] = {
+    "soil": "franco",
+    "master_enabled": True,
+    "window_start": "04:00",
+    "window_end": "08:00",
+    "overflow_policy": "truncate",
+    "gap_minutes": 5,
+    "max_runtime_min": None,
+    "wind_max_kmh": 18.0,
+    "rain_forecast_max_mm": 8.0,
+    "soak_minutes": 30,
+    "excluded_days": [],
+    "sequential": True,
+    "max_concurrent": 1,
+}
+
+# Campi accettati su una zona, con il valore usato quando non arrivano.
+# Le sentinelle -1 / "eredita" significano "eredita dal livello superiore".
+ZONE_FIELDS: dict[str, Any] = {
+    "name": "Nuova zona",
+    "valve_entity": None,
+    "enabled": True,
+    "zone_type": "prato_microterme",
+    "order": 0,
+    # override ereditabili
+    "soil": "eredita",
+    "kc": -1,
+    "root_depth_cm": -1,
+    "mad": -1,
+    "efficiency": -1,
+    "max_runtime_min": -1,
+    # sempre espliciti: descrivono l'impianto
+    "rate_mm_h": 10.0,
+    "emitter": "statici",
+    "corrector": 1.0,
+    "excluded_days": [],
+}
+
+# Stato runtime: non modificabile direttamente dal form di modifica.
+ZONE_RUNTIME: dict[str, Any] = {
+    "deficit_mm": 0.0,
+    "last_irrigation": None,
+    "last_duration_min": None,
+}
+
+
+class IrrigazioneStore:
+    """Wrapper sullo Store di Home Assistant con i default del dominio."""
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self._store: Store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+        self._data: dict[str, Any] = {"system": {}, "zones": {}}
+
+    async def async_load(self) -> dict[str, Any]:
+        """Carica da disco, completando i campi mancanti coi default."""
+        stored = await self._store.async_load()
+        if stored:
+            self._data = {
+                "system": {**DEFAULT_SYSTEM, **(stored.get("system") or {})},
+                "zones": stored.get("zones") or {},
+            }
+        else:
+            self._data = {"system": dict(DEFAULT_SYSTEM), "zones": {}}
+        return self._data
+
+    @property
+    def data(self) -> dict[str, Any]:
+        return self._data
+
+    @property
+    def system(self) -> dict[str, Any]:
+        return self._data["system"]
+
+    @property
+    def zones(self) -> dict[str, Any]:
+        return self._data["zones"]
+
+    def _save(self) -> None:
+        """Salvataggio ritardato: raggruppa le scritture ravvicinate."""
+        self._store.async_delay_save(lambda: self._data, STORAGE_SAVE_DELAY)
+
+    def zones_sorted(self) -> list[dict[str, Any]]:
+        """Zone in ordine di sequenza, poi per nome."""
+        return sorted(
+            self._data["zones"].values(),
+            key=lambda z: (z.get("order", 0), z.get("name", "")),
+        )
+
+    def async_create_zone(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Crea una zona, ignorando i campi non previsti dallo schema."""
+        zone_id = ulid_now()
+        zone: dict[str, Any] = {"id": zone_id}
+
+        for key, default in ZONE_FIELDS.items():
+            zone[key] = payload.get(key, default)
+        zone.update(ZONE_RUNTIME)
+
+        if not zone.get("order"):
+            zone["order"] = len(self._data["zones"]) + 1
+
+        self._data["zones"][zone_id] = zone
+        self._save()
+        return zone
+
+    def async_update_zone(
+        self, zone_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Aggiorna i campi noti di una zona. `None` se non esiste."""
+        zone = self._data["zones"].get(zone_id)
+        if zone is None:
+            return None
+
+        for key in ZONE_FIELDS:
+            if key in payload:
+                zone[key] = payload[key]
+
+        # Il deficit è modificabile a parte: serve per azzerarlo a mano
+        # dopo un'irrigazione manuale o una taratura.
+        if "deficit_mm" in payload:
+            zone["deficit_mm"] = max(0.0, float(payload["deficit_mm"]))
+
+        self._save()
+        return zone
+
+    def async_delete_zone(self, zone_id: str) -> bool:
+        """Rimuove una zona. False se l'id non esiste."""
+        if zone_id not in self._data["zones"]:
+            return False
+        del self._data["zones"][zone_id]
+        self._save()
+        return True
+
+    def async_update_system(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Aggiorna le sole chiavi di sistema previste dai default."""
+        for key in DEFAULT_SYSTEM:
+            if key in payload:
+                self._data["system"][key] = payload[key]
+        self._save()
+        return self._data["system"]
