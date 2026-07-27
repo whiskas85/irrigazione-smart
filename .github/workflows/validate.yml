@@ -23,6 +23,11 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
+          # Il controllo "brands" pretende che il dominio sia registrato in
+          # home-assistant/brands, cosa che vale solo per le integration del
+          # catalogo ufficiale. Questa è un'integration personalizzata e
+          # porta le proprie icone in `brand/`.
+          ignore: brands
 
   lint:
     name: Ruff
@@ -32,5 +37,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install ruff
+      # versione fissata: un aggiornamento di ruff non deve far fallire la
+      # CI su codice che non è cambiato
+      - run: pip install ruff==0.16.0
       - run: ruff check custom_components scripts

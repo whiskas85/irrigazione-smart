@@ -101,13 +101,18 @@ def update_changelog(version: str) -> bool:
     if not body:
         return False
 
-    updated = (
-        lines[: heading + 1]
-        + ["", f"## [{version}] - {date.today().isoformat()}", ""]
-        + body
-        + [""]
-        + lines[end:]
-    )
+    # La data del rilascio è quella locale di chi rilascia, non UTC: è
+    # l'informazione che finisce nelle note di versione.
+    today = date.today()  # noqa: DTZ011
+    updated = [
+        *lines[: heading + 1],
+        "",
+        f"## [{version}] - {today.isoformat()}",
+        "",
+        *body,
+        "",
+        *lines[end:],
+    ]
     CHANGELOG.write_text("\n".join(updated).rstrip() + "\n", encoding="utf-8")
     return True
 
@@ -148,9 +153,9 @@ def main() -> None:
         )
 
     write_manifest(target)
-    print(f"  manifest.json aggiornato")
+    print("  manifest.json aggiornato")
     if had_entries:
-        print(f"  CHANGELOG.md aggiornato")
+        print("  CHANGELOG.md aggiornato")
 
     if args.no_tag:
         print("\n  Commit e tag saltati (--no-tag)")

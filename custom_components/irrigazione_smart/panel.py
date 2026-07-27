@@ -34,6 +34,7 @@ from .const import (
     SIGNAL_STATE_CHANGED,
     SIGNAL_ZONES_CHANGED,
 )
+from .executor import get_executor
 from .hydro import (
     EMITTER_EFFICIENCY,
     SOIL_PROPS,
@@ -45,7 +46,6 @@ from .hydro import (
     schedule_sequence,
     window_quality,
 )
-from .executor import get_executor
 from .store import IrrigazioneStore
 
 PANEL_URL_PATH = "irrigazione-smart"
@@ -134,6 +134,7 @@ def _build_overview(hass: HomeAssistant) -> dict[str, Any]:
     coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
     cdata = (coordinator.data if coordinator else None) or {}
     wind_kmh = float(cdata.get("wind_kmh") or 0.0)
+    executor = get_executor(hass)
 
     system = store.system
     window = TimeWindow.from_strings(
@@ -176,7 +177,7 @@ def _build_overview(hass: HomeAssistant) -> dict[str, Any]:
             },
         },
         "zones": zones,
-        "running": executor.status() if (executor := get_executor(hass)) else {"active": False},
+        "running": executor.status() if executor else {"active": False},
         "flow": _flow_payload(hass, system),
         "schedule": _schedule_payload(plans, window, system),
         "meteo": _meteo_payload(cdata, store),

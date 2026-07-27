@@ -1,0 +1,30 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+# Le regole vanno dichiarate qui, non lasciate ai default di ruff: i
+# default cambiano tra le versioni e la CI installa sempre l'ultima, così
+# il lint si romperebbe da solo senza che nessuno abbia toccato il codice.
+[tool.ruff.lint]
+select = [
+  "E",    # pycodestyle
+  "F",    # pyflakes
+  "W",    # warning
+  "I",    # import ordinati
+  "UP",   # sintassi moderna
+  "B",    # bug ricorrenti
+  "SIM",  # semplificazioni
+  "ISC",  # concatenazione di stringhe
+  "DTZ",  # date senza fuso orario
+  "RUF",  # regole specifiche di ruff
+]
+ignore = [
+  # I testi sono in italiano e usano il trattino lungo per gli intervalli
+  # ("04:00–08:00"): non è un carattere ambiguo entrato per sbaglio.
+  "RUF001",
+  "RUF002",
+  "RUF003",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["custom_components"]

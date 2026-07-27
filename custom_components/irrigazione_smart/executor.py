@@ -12,6 +12,7 @@ eventi e mostrato in pagina, ma non blocca né interrompe l'irrigazione.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import Any
 
@@ -128,7 +129,7 @@ class IrrigationExecutor:
         try:
             await asyncio.wait_for(future, timeout)
             return True
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return False
         finally:
             unsub()
@@ -145,7 +146,7 @@ class IrrigationExecutor:
         """Chiude la valvola, senza sollevare eccezioni."""
         try:
             await self._switch_valve(entity_id, False)
-        except Exception:  # noqa: BLE001 - la chiusura non deve mai propagare
+        except Exception:
             _LOGGER.exception("Chiusura della valvola %s fallita", entity_id)
 
     # ---------------------------------------------------------- avvio API
@@ -186,10 +187,8 @@ class IrrigationExecutor:
         """Ferma tutto e chiude la valvola in corso."""
         if self._task is not None and not self._task.done():
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
 
     # ------------------------------------------------------------ motore
 
@@ -311,7 +310,13 @@ class IrrigationExecutor:
                     cycle=cycle,
                     cycles=cycles,
                     zone_total_min=total_minutes,
-                    zone_started_at=dt_util.utcnow() if cycle == 1 else self._state.get("zone_started_at"),
+                    # l'inizio si fissa al primo ciclo: la barra di
+                    # progresso deve misurare l'intera linea, non il ciclo
+                    zone_started_at=(
+                        dt_util.utcnow()
+                        if cycle == 1
+                        else self._state.get("zone_started_at")
+                    ),
                 )
 
                 if not await self._open_confirmed(valve):

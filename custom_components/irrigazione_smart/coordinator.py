@@ -176,8 +176,9 @@ class IrrigazioneCoordinator(DataUpdateCoordinator):
         """Aggiorna gli estremi e le medie della giornata in corso."""
         temp = live.get("temperature")
         if temp is not None:
-            daily["t_min"] = temp if daily["t_min"] is None else min(daily["t_min"], temp)
-            daily["t_max"] = temp if daily["t_max"] is None else max(daily["t_max"], temp)
+            t_min, t_max = daily["t_min"], daily["t_max"]
+            daily["t_min"] = temp if t_min is None else min(t_min, temp)
+            daily["t_max"] = temp if t_max is None else max(t_max, temp)
 
         if live.get("humidity") is not None:
             daily["rh_sum"] += live["humidity"]
@@ -220,7 +221,8 @@ class IrrigazioneCoordinator(DataUpdateCoordinator):
             solar_mj = (daily["irr_sum"] / daily["irr_n"]) * 0.0864
 
         closed = dt_util.parse_date(daily["date"]) if daily.get("date") else None
-        day_of_year = closed.timetuple().tm_yday if closed else dt_util.now().timetuple().tm_yday
+        reference = closed or dt_util.now()
+        day_of_year = reference.timetuple().tm_yday
 
         et0 = compute_et0(
             t_min=t_min,
@@ -247,7 +249,11 @@ class IrrigazioneCoordinator(DataUpdateCoordinator):
 
         _LOGGER.info(
             "Giorno %s chiuso: ET0 %.2f mm (%s), pioggia %.1f mm, %d zone aggiornate",
-            daily.get("date"), et0.value_mm, et0.method, rain_mm, len(self._store.zones),
+            daily.get("date"),
+            et0.value_mm,
+            et0.method,
+            rain_mm,
+            len(self._store.zones),
         )
         # i sensori esposti leggono lo store: vanno riallineati subito
         async_dispatcher_send(self.hass, SIGNAL_STATE_CHANGED)
@@ -283,8 +289,9 @@ class IrrigazioneCoordinator(DataUpdateCoordinator):
         daily["last_update"] = now.isoformat()
         self._store.async_save_daily(daily)
 
+        wind_ms = live.get("wind_ms")
         return {
             "live": live,
             "daily": daily,
-            "wind_kmh": (live["wind_ms"] * 3.6) if live.get("wind_ms") is not None else 0.0,
+            "wind_kmh": wind_ms * 3.6 if wind_ms is not None else 0.0,
         }

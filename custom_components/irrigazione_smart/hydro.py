@@ -602,7 +602,7 @@ class TimeWindow:
     end_min: int
 
     @classmethod
-    def from_strings(cls, start: str, end: str) -> "TimeWindow":
+    def from_strings(cls, start: str, end: str) -> TimeWindow:
         """Accetta 'HH:MM' o 'HH:MM:SS'."""
 
         def parse(value: str) -> int:
@@ -645,26 +645,34 @@ def window_quality(window: TimeWindow) -> tuple[str, str]:
     if end_h > 18.0 or start_h >= 18.0:
         return (
             "sconsigliata",
-            "irrigare la sera lascia il fogliame bagnato tutta la notte "
-            "e favorisce le malattie fungine",
+            (
+                "irrigare la sera lascia il fogliame bagnato tutta la notte "
+                "e favorisce le malattie fungine"
+            ),
         )
     if start_h >= 10.0 and end_h <= 17.0:
         return (
             "sconsigliata",
-            "nelle ore centrali una quota rilevante dell'acqua evapora "
-            "prima di infiltrarsi",
+            (
+                "nelle ore centrali una quota rilevante dell'acqua evapora "
+                "prima di infiltrarsi"
+            ),
         )
-    if 3.0 <= start_h and end_h <= 10.0:
+    if start_h >= 3.0 and end_h <= 10.0:
         return (
             "ottimale",
-            "il prato è già bagnato di rugiada: l'irrigazione non aggiunge "
-            "ore di bagnatura fogliare",
+            (
+                "il prato è già bagnato di rugiada: l'irrigazione non aggiunge "
+                "ore di bagnatura fogliare"
+            ),
         )
     if start_h < 3.0:
         return (
             "accettabile",
-            "va bene dal punto di vista fitosanitario, ma allunga inutilmente "
-            "la bagnatura pre-alba",
+            (
+                "va bene dal punto di vista fitosanitario, ma allunga "
+                "inutilmente la bagnatura pre-alba"
+            ),
         )
     return ("accettabile", "finestra praticabile, non ottimale")
 
@@ -682,7 +690,7 @@ class ScheduledRun:
     zone_name: str
     start_min: int
     end_min: int
-    plan: "RunPlan"
+    plan: RunPlan
 
     @property
     def start_hhmm(self) -> str:
@@ -714,7 +722,7 @@ class SequenceSchedule:
 
 
 def schedule_sequence(
-    zone_plans: list[tuple[str, str, "RunPlan"]],
+    zone_plans: list[tuple[str, str, RunPlan]],
     window: TimeWindow,
     *,
     gap_minutes: int = 5,
@@ -755,11 +763,11 @@ def schedule_sequence(
                 zone_id=zone_id,
                 zone_name=zone_name,
                 start_min=cursor,
-                end_min=cursor + int(round(duration)),
+                end_min=cursor + round(duration),
                 plan=plan,
             )
         )
-        cursor += int(round(duration))
+        cursor += round(duration)
         total += needed
 
     overflow = max(0.0, total - window.duration_min)
@@ -815,9 +823,13 @@ def check_guards(
         return GuardResult(True, "rischio_gelo")
     if day_excluded:
         return GuardResult(True, "giorno_escluso")
-    if window is not None and now_minute is not None:
-        if not window.contains(now_minute):
-            return GuardResult(True, f"fuori_finestra_{window}")
+    fuori_finestra = (
+        window is not None
+        and now_minute is not None
+        and not window.contains(now_minute)
+    )
+    if fuori_finestra:
+        return GuardResult(True, f"fuori_finestra_{window}")
     if wind_kmh > wind_max_kmh:
         return GuardResult(True, f"vento_eccessivo_{wind_kmh:.0f}kmh")
     if rain_forecast_mm > rain_forecast_max_mm:
@@ -955,7 +967,8 @@ if __name__ == "__main__":
             f"radici {params.root_depth_cm:.0f}cm"
         )
         print(
-            f"   TAW {params.taw_mm:.1f}mm · soglia {params.trigger_threshold_mm:.1f}mm · "
+            f"   TAW {params.taw_mm:.1f}mm · "
+            f"soglia {params.trigger_threshold_mm:.1f}mm · "
             f"portata {params.rate_mm_h}mm/h · infiltr. {params.infiltration_mm_h}mm/h"
         )
         print()
@@ -1012,7 +1025,7 @@ if __name__ == "__main__":
         win = TimeWindow.from_strings(start, end)
         level, why = window_quality(win)
         badge = {"ottimale": "✓", "accettabile": "~", "sconsigliata": "✗"}[level]
-        print(f"   {badge} {str(win):<12} {win.duration_min:>3} min   {level}")
+        print(f"   {badge} {win!s:<12} {win.duration_min:>3} min   {level}")
         print(f"     {why}")
         print()
 
