@@ -23,7 +23,26 @@ const TABS = [
   { id: "dashboard", label: "Dashboard", icon: "mdi:view-dashboard-outline" },
   { id: "zone", label: "Zone", icon: "mdi:sprinkler-variant" },
   { id: "meteo", label: "Meteo", icon: "mdi:weather-partly-cloudy" },
+  { id: "log", label: "Log", icon: "mdi:format-list-bulleted" },
 ];
+
+/* Icona predefinita per tipo di zona, quando la linea non ne ha una sua. */
+const ZONE_TYPE_ICONS = {
+  prato_microterme: "mdi:grass",
+  prato_macroterme: "mdi:grass",
+  aiuola_arbusti: "mdi:flower",
+  aiuola_fiorita: "mdi:flower-tulip",
+  orto: "mdi:carrot",
+};
+
+const LOG_ICONS = {
+  started: "mdi:play-circle-outline",
+  finished: "mdi:check-circle-outline",
+  zone_started: "mdi:water",
+  zone_finished: "mdi:water-check",
+  zone_failed: "mdi:alert-circle-outline",
+  config: "mdi:cog-outline",
+};
 
 const ZONE_TYPE_LABELS = {
   prato_microterme: "Prato microterme",
@@ -93,6 +112,33 @@ const BLOCKING = [
 ];
 const isBlocked = (reason) => !!reason && BLOCKING.some((b) => reason.startsWith(b));
 
+/* Stato a colpo d'occhio di una linea:
+     azzurro = sta irrigando ora
+     rosso   = carenza forte (oltre metà strada tra soglia e TAW)
+     giallo  = deficit oltre soglia, chiede acqua
+     verde   = tutto a posto
+   La soglia "grave" non è arbitraria: oltre quel punto la pianta è in
+   stress prolungato, non solo assetata. */
+function zoneStatus(zone, runningZoneId) {
+  if (runningZoneId && zone.id === runningZoneId) {
+    return { level: "watering", label: "in irrigazione" };
+  }
+  if (!zone.enabled) return { level: "off", label: "disattivata" };
+
+  const c = zone.computed || {};
+  const deficit = Number(zone.deficit_mm || 0);
+  const threshold = Number(c.trigger_threshold_mm || 0);
+  const taw = Number(c.taw_mm || 0);
+
+  if (threshold > 0 && deficit >= threshold) {
+    const grave = taw > threshold && deficit >= threshold + (taw - threshold) / 2;
+    return grave
+      ? { level: "critical", label: "carenza forte" }
+      : { level: "thirsty", label: "chiede acqua" };
+  }
+  return { level: "ok", label: "ok" };
+}
+
 class IrrigazioneSmartPanel extends HTMLElement {
   constructor() {
     super();
@@ -147,10 +193,19 @@ class IrrigazioneSmartPanel extends HTMLElement {
     if (!this._hass || this.shadowRoot.querySelector("ha-dialog")) return;
     try {
       const fresh = await this._api("GET", "overview");
-      if (JSON.stringify(fresh) !== JSON.stringify(this._overview)) {
-        this._overview = fresh;
-        this._render();
+      let changed = JSON.stringify(fresh) !== JSON.stringify(this._overview);
+      this._overview = fresh;
+
+      // il registro si aggiorna solo quando lo si sta guardando
+      if (this._tab === "log") {
+        const res = await this._api("GET", "log");
+        const entries = (res && res.entries) || [];
+        if (JSON.stringify(entries) !== JSON.stringify(this._log)) {
+          this._log = entries;
+          changed = true;
+        }
       }
+      if (changed) this._render();
     } catch (_e) {
       /* un errore di rete transitorio non deve svuotare la pagina */
     }
@@ -286,6 +341,21 @@ class IrrigazioneSmartPanel extends HTMLElement {
     onClick(".run-zone", (e) =>
       this._openForceDialog(e.currentTarget.getAttribute("data-id"))
     );
+    onClick(".move-zone", (e) => {
+      const el = e.currentTarget;
+      this._mutate("POST", `zones/${el.getAttribute("data-id")}/move`, {
+        direction: el.getAttribute("data-dir"),
+      });
+    });
+    onClick(".clear-log", async () => {
+      try {
+        await this._api("DELETE", "log");
+        this._log = [];
+      } catch (err) {
+        this._error = (err && err.message) || String(err);
+      }
+      this._render();
+    });
 
     // master generale
     const master = sr.querySelector("[data-master]");
@@ -325,7 +395,62 @@ class IrrigazioneSmartPanel extends HTMLElement {
 
     if (this._tab === "zone") return err + this._zoneTab();
     if (this._tab === "meteo") return err + this._meteoTab();
+    if (this._tab === "log") return err + this._logTab();
     return err + this._dashboardTab();
+  }
+
+  // ---------------------------------------------------------------- LOG
+
+  async _fetchLog() {
+    try {
+      const res = await this._api("GET", "log");
+      this._log = (res && res.entries) || [];
+    } catch (_e) {
+      this._log = [];
+    }
+    this._render();
+  }
+
+  _logTab() {
+    if (this._log === undefined) {
+      this._fetchLog();
+      return `<div class="empty">Caricamento…</div>`;
+    }
+    if (!this._log.length) {
+      return `<ha-card><div class="inner">
+        <div class="card-head"><ha-icon icon="mdi:format-list-bulleted"></ha-icon><h2>Attività</h2></div>
+        <div class="empty-state">
+          <ha-icon icon="mdi:history"></ha-icon>
+          <p>Nessuna attività registrata.</p>
+          <p class="muted small">Qui finiscono avvii, irrigazioni concluse e linee non partite.</p>
+        </div>
+      </div></ha-card>`;
+    }
+
+    const rows = this._log.map((e) => {
+      const d = new Date(e.ts);
+      const two = (n) => String(n).padStart(2, "0");
+      const when = isNaN(d)
+        ? ""
+        : `${two(d.getDate())}/${two(d.getMonth() + 1)} ${two(d.getHours())}:${two(d.getMinutes())}`;
+      return `<div class="row log-row lv-${esc(e.level)}">
+        <ha-icon icon="${LOG_ICONS[e.kind] || "mdi:information-outline"}"></ha-icon>
+        <div class="row-main">
+          <span class="row-label">${esc(e.text)}</span>
+          <span class="sub">${esc(when)}</span>
+        </div>
+      </div>`;
+    }).join("");
+
+    return `<ha-card><div class="inner">
+      <div class="card-head">
+        <ha-icon icon="mdi:format-list-bulleted"></ha-icon>
+        <h2>Attività</h2>
+        <span class="spacer"></span>
+        ${this._button("clear-log", "Svuota")}
+      </div>
+      ${rows}
+    </div></ha-card>`;
   }
 
   // --------------------------------------------------------- DASHBOARD
@@ -445,22 +570,31 @@ class IrrigazioneSmartPanel extends HTMLElement {
       </div></ha-card>`;
     }
 
+    const running = this._overview.running || {};
     const rows = zones.map((z) => {
       const c = z.computed || {};
       const plan = c.plan || {};
+      const st = zoneStatus(z, running.active ? running.zone_id : null);
+      const deficit = Number(z.deficit_mm || 0);
+      const thr = Number(c.trigger_threshold_mm || 0);
+      const busy = !!running.active;
+
+      // "irriga oggi" è l'informazione che si cerca per prima guardando
+      // la dashboard: la si mostra come stato, non nascosta nei dettagli.
       let state;
-      if (plan.should_run) {
-        state = `<span class="badge run">${plan.total_minutes} min</span>`;
+      if (st.level === "watering") {
+        state = `<span class="badge run">in irrigazione</span>`;
+      } else if (plan.should_run) {
+        state = `<span class="badge run">irriga oggi · ${plan.total_minutes} min</span>`;
       } else if (isBlocked(plan.reason)) {
         state = `<span class="badge warn">${esc(reasonLabel(plan.reason))}</span>`;
       } else {
         state = `<span class="badge ok">${esc(reasonLabel(plan.reason) || "ok")}</span>`;
       }
-      const deficit = Number(z.deficit_mm || 0);
-      const thr = Number(c.trigger_threshold_mm || 0);
-      const busy = !!(this._overview.running || {}).active;
+
       return `<div class="row line${z.enabled ? "" : " dim"}">
-        <ha-icon icon="mdi:pipe-valve"></ha-icon>
+        <span class="dot st-${st.level}" title="${esc(st.label)}"></span>
+        <ha-icon icon="${esc(z.icon || ZONE_TYPE_ICONS[z.zone_type] || "mdi:pipe-valve")}"></ha-icon>
         <div class="row-main">
           <span class="row-label">${esc(z.name)}</span>
           <span class="sub">${deficit.toFixed(1)} / ${thr.toFixed(1)} mm${this._lastRunText(z)}</span>
@@ -597,14 +731,28 @@ class IrrigazioneSmartPanel extends HTMLElement {
       ? `<span class="chip"><ha-icon icon="mdi:valve"></ha-icon>${esc(z.valve_entity)}</span>`
       : `<span class="chip warnchip"><ha-icon icon="mdi:valve"></ha-icon>nessuna valvola</span>`;
 
+    const zones = this._overview.zones || [];
+    const index = zones.findIndex((x) => x.id === z.id);
+
     return `<div class="zone${z.enabled ? "" : " dim"}">
       <div class="zone-head">
         <ha-switch data-zone-toggle="${z.id}" ${z.enabled ? "checked" : ""}></ha-switch>
+        <ha-icon class="zone-icon" icon="${esc(z.icon || ZONE_TYPE_ICONS[z.zone_type] || "mdi:sprinkler")}"></ha-icon>
         <div class="zone-title">
           <span class="zone-name">${esc(z.name)}</span>
           <span class="sub">${esc(label(ZONE_TYPE_LABELS, z.zone_type))} · ${esc(label(SOIL_LABELS, c.soil))} · ${esc(label(EMITTER_LABELS, z.emitter))}</span>
         </div>
         ${status}
+        <div class="order-btns">
+          <ha-icon-button class="move-zone" data-id="${z.id}" data-dir="up"
+            label="Sposta su"${index === 0 ? " disabled" : ""}>
+            <ha-icon icon="mdi:chevron-up"></ha-icon>
+          </ha-icon-button>
+          <ha-icon-button class="move-zone" data-id="${z.id}" data-dir="down"
+            label="Sposta giù"${index === zones.length - 1 ? " disabled" : ""}>
+            <ha-icon icon="mdi:chevron-down"></ha-icon>
+          </ha-icon-button>
+        </div>
         <ha-icon-button class="edit-zone" data-id="${z.id}" label="Modifica">
           <ha-icon icon="mdi:pencil"></ha-icon>
         </ha-icon-button>
@@ -860,7 +1008,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
       name: "", valve_entity: "", enabled: true, zone_type: "prato_microterme",
       rate_mm_h: 10, emitter: "statici", corrector: 1.0, soil: INHERIT_STR,
       kc: INHERIT_NUM, root_depth_cm: INHERIT_NUM, mad: INHERIT_NUM,
-      max_runtime_min: INHERIT_NUM, deficit_mm: 0,
+      max_runtime_min: INHERIT_NUM, deficit_mm: 0, icon: "",
     };
     const inh = (v) => (v == null || Number(v) === INHERIT_NUM ? "" : v);
 
@@ -872,6 +1020,9 @@ class IrrigazioneSmartPanel extends HTMLElement {
         })}
         ${this._select("zone_type", "Tipo di zona", opts.zone_types || [], z.zone_type, ZONE_TYPE_LABELS)}
         ${this._select("emitter", "Erogazione", opts.emitters || [], z.emitter, EMITTER_LABELS)}
+        ${this._field("icon", "Icona", z.icon, {
+          helper: "Nome mdi, es. mdi:flower. Vuoto = icona del tipo di zona",
+        })}
         ${this._field("rate_mm_h", "Portata", z.rate_mm_h, {
           type: "number", suffix: "mm/h",
           helper: "Misurata col tuna can test: senza questo dato le durate sono arbitrarie",
@@ -950,13 +1101,25 @@ class IrrigazioneSmartPanel extends HTMLElement {
         ${this._field("wind_max_kmh", "Vento massimo", sys.wind_max_kmh, { type: "number", suffix: "km/h" })}
         ${this._field("rain_forecast_max_mm", "Pioggia prevista massima", sys.rain_forecast_max_mm, { type: "number", suffix: "mm" })}
         ${this._select("overflow_policy", "Se la finestra non basta", ["truncate", "overflow"], sys.overflow_policy, { truncate: "Escludi le linee eccedenti", overflow: "Sfora la finestra" })}
+        ${this._field("flow_entity", "Flussostato", sys.flow_entity, {
+          helper: "entity_id del sensore di portata. Solo lettura: non blocca l'irrigazione",
+        })}
+        ${this._field("valve_timeout_s", "Attesa conferma valvola", sys.valve_timeout_s, {
+          type: "number", suffix: "s",
+          helper: "Oltre questo tempo senza conferma, la linea viene saltata",
+        })}
       </div>`;
 
     this._showDialog("Impostazioni sistema", content, async (dlg) => {
       const data = this._collect(dlg, {
-        numbers: ["soak_minutes", "gap_minutes", "wind_max_kmh", "rain_forecast_max_mm"],
+        numbers: [
+          "soak_minutes", "gap_minutes", "wind_max_kmh",
+          "rain_forecast_max_mm", "valve_timeout_s",
+        ],
         booleans: [],
       });
+      // campo svuotato = flussostato rimosso
+      if (!data.flow_entity) data.flow_entity = null;
       await this._mutate("POST", "system", data);
     });
   }
@@ -1121,6 +1284,25 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .badge.q-sconsigliata { background: color-mix(in srgb, var(--error-color, #db4437) 18%, transparent); color: var(--error-color, #db4437); }
       .warntext { color: var(--warning-color, #ffa600); }
       .actions { display: flex; gap: 8px; margin-top: 14px; }
+
+      /* pallino di stato: verde ok, giallo assetata, rosso in carenza,
+         azzurro mentre irriga */
+      .dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
+      .dot.st-ok { background: var(--success-color, #43a047); }
+      .dot.st-thirsty { background: var(--warning-color, #ffa600); }
+      .dot.st-critical { background: var(--error-color, #db4437); }
+      .dot.st-off { background: var(--disabled-text-color, #bdbdbd); }
+      .dot.st-watering { background: var(--info-color, var(--primary-color));
+                         animation: pulse 1.6s ease-in-out infinite; }
+
+      .order-btns { display: flex; flex-direction: column; }
+      .order-btns ha-icon-button { --mdc-icon-size: 18px; padding: 0; }
+      .order-btns ha-icon-button[disabled] { opacity: .3; pointer-events: none; }
+      .zone-icon { color: var(--state-icon-color, var(--secondary-text-color)); }
+
+      .log-row.lv-warning > ha-icon { color: var(--warning-color, #ffa600); }
+      .log-row.lv-error > ha-icon { color: var(--error-color, #db4437); }
+      .log-row.lv-error .row-label { color: var(--error-color, #db4437); }
       /* pulsazione mentre l'acqua scorre davvero */
       .master-icon.pulse { animation: pulse 1.6s ease-in-out infinite; }
       @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }

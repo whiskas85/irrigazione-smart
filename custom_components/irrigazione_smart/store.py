@@ -52,6 +52,8 @@ ZONE_FIELDS: dict[str, Any] = {
     "enabled": True,
     "zone_type": "prato_microterme",
     "order": 0,
+    # icona mostrata in pagina; vuota = si usa quella del tipo di zona
+    "icon": None,
     # override ereditabili
     "soil": "eredita",
     "kc": -1,
@@ -211,6 +213,31 @@ class IrrigazioneStore:
 
         self._save()
         return zone
+
+    def async_move_zone(self, zone_id: str, direction: int) -> bool:
+        """Sposta una linea su (-1) o giù (+1) nella sequenza.
+
+        L'ordine conta: le linee vengono irrigate in questa successione, e
+        chi ha poca finestra vuole le zone importanti per prime.
+        """
+        ordered = self.zones_sorted()
+        index = next(
+            (i for i, z in enumerate(ordered) if z["id"] == zone_id), None
+        )
+        if index is None:
+            return False
+
+        target = index + direction
+        if not 0 <= target < len(ordered):
+            return False
+
+        ordered[index], ordered[target] = ordered[target], ordered[index]
+        # si rinumera l'intera sequenza: evita buchi e valori duplicati
+        for position, zone in enumerate(ordered, start=1):
+            zone["order"] = position
+
+        self._save()
+        return True
 
     def async_delete_zone(self, zone_id: str) -> bool:
         """Rimuove una zona. False se l'id non esiste."""

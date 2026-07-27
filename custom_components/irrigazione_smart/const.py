@@ -44,6 +44,14 @@ EVENT_STARTED: Final = f"{DOMAIN}_started"
 EVENT_FINISHED: Final = f"{DOMAIN}_finished"
 EVENT_ZONE_STARTED: Final = f"{DOMAIN}_zone_started"
 EVENT_ZONE_FINISHED: Final = f"{DOMAIN}_zone_finished"
+# Emesso quando una linea non parte: valvola che non conferma, valvola non
+# configurata, o linea saltata. È l'evento su cui agganciare gli allarmi.
+EVENT_ZONE_FAILED: Final = f"{DOMAIN}_zone_failed"
+
+# Registro attività: file separato da quello delle zone, così scriverlo
+# spesso non riscrive lo stato prezioso del bilancio idrico.
+STORAGE_KEY_LOG: Final = f"{DOMAIN}.log"
+LOG_MAX_ENTRIES: Final = 300
 
 # Servizi
 SERVICE_RUN_ZONE: Final = "irriga_linea"

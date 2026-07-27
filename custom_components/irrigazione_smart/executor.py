@@ -25,6 +25,7 @@ from .const import (
     DOMAIN,
     EVENT_FINISHED,
     EVENT_STARTED,
+    EVENT_ZONE_FAILED,
     EVENT_ZONE_FINISHED,
     EVENT_ZONE_STARTED,
     SIGNAL_STATE_CHANGED,
@@ -245,6 +246,21 @@ class IrrigationExecutor:
             )
             async_dispatcher_send(self._hass, SIGNAL_STATE_CHANGED)
 
+    def _fire_failed(
+        self, zone_id: str, zone: dict[str, Any], motivo: str
+    ) -> None:
+        """Segnala che una linea non è stata irrigata, e perché."""
+        self._hass.bus.async_fire(
+            EVENT_ZONE_FAILED,
+            {
+                "zone_id": zone_id,
+                "nome": zone.get("name"),
+                "motivo": motivo,
+                "valvola": zone.get("valve_entity"),
+                "deficit_mm": zone.get("deficit_mm"),
+            },
+        )
+
     async def _run_zone(
         self, zone_id: str, minutes: float | None, next_zone_id: str | None
     ) -> bool:
@@ -261,9 +277,8 @@ class IrrigationExecutor:
         if minutes is None:
             plan = evaluate_zone(zone, system, deficit)
             if not plan.should_run:
-                _LOGGER.info(
-                    "Linea %s saltata: %s", zone.get("name"), plan.reason
-                )
+                _LOGGER.info("Linea %s saltata: %s", zone.get("name"), plan.reason)
+                self._fire_failed(zone_id, zone, plan.reason)
                 return False
             total_minutes = plan.total_minutes
             cycles = plan.cycles
@@ -275,9 +290,8 @@ class IrrigationExecutor:
 
         valve = zone.get("valve_entity")
         if not valve:
-            _LOGGER.warning(
-                "Linea %s senza entità valvola: saltata", zone.get("name")
-            )
+            _LOGGER.warning("Linea %s senza entità valvola: saltata", zone.get("name"))
+            self._fire_failed(zone_id, zone, "nessuna valvola configurata")
             return False
 
         per_cycle = total_minutes / cycles if cycles else total_minutes
@@ -325,9 +339,15 @@ class IrrigationExecutor:
                     _LOGGER.error(
                         "La valvola %s della linea %s non ha confermato "
                         "l'apertura: linea saltata",
-                        valve, name,
+                        valve,
+                        name,
                     )
                     await self._close(valve)
+                    self._fire_failed(
+                        zone_id,
+                        zone,
+                        f"la valvola {valve} non ha confermato l'apertura",
+                    )
                     return False
 
                 confirmed_any = True

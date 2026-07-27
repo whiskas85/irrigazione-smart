@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 from .const import DOMAIN, PLATFORMS
 from .coordinator import IrrigazioneCoordinator
 from .executor import IrrigationExecutor
+from .logbook import IrrigazioneLog, async_subscribe_events
 from .panel import async_remove_panel, async_setup_panel, async_setup_store
 from .services import async_setup_services
 
@@ -26,6 +27,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_config_entry_first_refresh()
     hass.data[DOMAIN]["coordinator"] = coordinator
     hass.data[DOMAIN]["executor"] = IrrigationExecutor(hass, store)
+
+    activity_log = IrrigazioneLog(hass)
+    await activity_log.async_load()
+    hass.data[DOMAIN]["log"] = activity_log
+    for unsub in async_subscribe_events(hass, activity_log):
+        entry.async_on_unload(unsub)
 
     await async_setup_services(hass)
 

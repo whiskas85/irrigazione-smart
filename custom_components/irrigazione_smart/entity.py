@@ -18,6 +18,10 @@ from .store import IrrigazioneStore
 
 MANUFACTURER = "Irrigazione Smart"
 
+# Dalla scheda del dispositivo si arriva alla pagina dell'integration con
+# un clic, invece di doverla cercare nella barra laterale.
+PANEL_LINK = "homeassistant://irrigazione-smart"
+
 
 def system_device_info(entry_id: str) -> DeviceInfo:
     """Dispositivo che rappresenta l'impianto nel suo insieme."""
@@ -25,6 +29,7 @@ def system_device_info(entry_id: str) -> DeviceInfo:
         identifiers={(DOMAIN, f"{entry_id}_system")},
         name="Irrigazione Smart",
         manufacturer=MANUFACTURER,
+        configuration_url=PANEL_LINK,
         entry_type=None,
     )
 
@@ -36,6 +41,7 @@ def zone_device_info(entry_id: str, zone: dict[str, Any]) -> DeviceInfo:
         name=zone.get("name") or "Linea",
         manufacturer=MANUFACTURER,
         model="Linea di irrigazione",
+        configuration_url=PANEL_LINK,
         via_device=(DOMAIN, f"{entry_id}_system"),
     )
 

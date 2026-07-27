@@ -8,6 +8,27 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Aggiunto
+- **Scheda Log**: registro delle attività con avvii, irrigazioni concluse e
+  soprattutto le linee **non** partite, col motivo. Vive in un file di
+  storage separato da quello delle zone, così scriverlo spesso non
+  rimescola lo stato del bilancio idrico. Tenuto alle ultime 300 voci
+- Nuovo evento `irrigazione_smart_zone_failed`, emesso quando una linea non
+  parte (valvola che non conferma, valvola non configurata, linea saltata):
+  è l'aggancio per gli allarmi
+- **Stato a colpo d'occhio** di ogni linea: verde tutto a posto, giallo
+  chiede acqua, rosso carenza forte, azzurro in irrigazione
+- Indicazione **"irriga oggi"** con i minuti previsti, direttamente in
+  dashboard
+- **Ordinamento delle linee** con i pulsanti su/giù: l'ordine determina la
+  successione di irrigazione
+- **Icona personalizzabile** per ogni linea, con un'icona predefinita
+  sensata per tipo di zona (prato, aiuola, orto)
+- **Flussostato** e **attesa di conferma valvola** ora configurabili dal
+  pannello, non più solo da storage
+- Dalla scheda del dispositivo si arriva alla pagina dell'integration con
+  un clic
+
 ### Corretto
 - La validazione automatica falliva da sempre, su tutti e tre i controlli,
   quindi nessun problema veniva mai segnalato:

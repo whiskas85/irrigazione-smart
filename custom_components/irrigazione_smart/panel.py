@@ -46,6 +46,7 @@ from .hydro import (
     schedule_sequence,
     window_quality,
 )
+from .logbook import get_log
 from .store import IrrigazioneStore
 
 PANEL_URL_PATH = "irrigazione-smart"
@@ -332,6 +333,50 @@ class ZoneDetailView(HomeAssistantView):
         return self.json({"overview": _build_overview(hass)})
 
 
+class ZoneMoveView(HomeAssistantView):
+    """Spostamento di una linea nella sequenza."""
+
+    url = "/api/irrigazione_smart/zones/{zone_id}/move"
+    name = "api:irrigazione_smart:zone_move"
+    requires_auth = True
+
+    async def post(self, request, zone_id: str):
+        _require_admin(request)
+        hass: HomeAssistant = request.app["hass"]
+        store = _get_store(hass)
+        if store is None:
+            return self.json_message("Integration non configurata", 400)
+
+        payload = await request.json()
+        direction = -1 if payload.get("direction") == "up" else 1
+        if not store.async_move_zone(zone_id, direction):
+            return self.json_message("Spostamento non possibile", 400)
+
+        _notify(hass)
+        return self.json({"overview": _build_overview(hass)})
+
+
+class LogView(HomeAssistantView):
+    """Registro attività: lettura e svuotamento."""
+
+    url = "/api/irrigazione_smart/log"
+    name = "api:irrigazione_smart:log"
+    requires_auth = True
+
+    async def get(self, request):
+        hass: HomeAssistant = request.app["hass"]
+        activity = get_log(hass)
+        return self.json({"entries": activity.entries if activity else []})
+
+    async def delete(self, request):
+        _require_admin(request)
+        hass: HomeAssistant = request.app["hass"]
+        activity = get_log(hass)
+        if activity is not None:
+            activity.clear()
+        return self.json({"entries": []})
+
+
 class RunView(HomeAssistantView):
     """Avvio forzato: una linea o l'intera sequenza."""
 
@@ -425,6 +470,8 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
         hass.http.register_view(ZonesView())
         hass.http.register_view(ZoneDetailView())
         hass.http.register_view(SystemView())
+        hass.http.register_view(ZoneMoveView())
+        hass.http.register_view(LogView())
         hass.http.register_view(RunView())
         hass.http.register_view(StopView())
         domain_data[_HTTP_FLAG] = True
