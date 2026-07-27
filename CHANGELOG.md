@@ -8,6 +8,11 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Modificato
+- Nuova icona del brand: sagoma "casa" cyan con irrigatore, spruzzi e
+  cespugli. Sorgente vettoriale in `brand-src/icon.svg`, PNG rigenerati in
+  `custom_components/irrigazione_smart/brand/`
+
 ## [0.1.1] - 2026-07-27
 
 ### Corretto

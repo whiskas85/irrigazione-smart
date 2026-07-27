@@ -1,32 +1,47 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <defs>
-    <linearGradient id="acqua" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0"   stop-color="#3EA8E5"/>
-      <stop offset="0.55" stop-color="#2178C4"/>
-      <stop offset="1"   stop-color="#12558F"/>
-    </linearGradient>
-  </defs>
-
-  <rect width="512" height="512" rx="116" ry="116" fill="url(#acqua)"/>
-
-  <!-- casa: tratto continuo, spalle arrotondate -->
-  <path d="M 78 254 L 256 106 L 434 254"
-        fill="none" stroke="#FFFFFF" stroke-width="30"
-        stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M 128 232 L 128 404 L 384 404 L 384 232"
-        fill="none" stroke="#FFFFFF" stroke-width="30"
-        stroke-linecap="round" stroke-linejoin="round"/>
-
-  <!-- irrigatore: corpo e testina -->
-  <path d="M 256 392 L 256 330"
-        fill="none" stroke="#FFFFFF" stroke-width="26" stroke-linecap="round"/>
-  <circle cx="256" cy="316" r="19" fill="#FFFFFF"/>
-
-  <!-- getti d'acqua -->
-  <path d="M 231 301 Q 190 276 183 234"
-        fill="none" stroke="#FFFFFF" stroke-width="22" stroke-linecap="round"/>
-  <path d="M 256 288 Q 256 262 256 238"
-        fill="none" stroke="#FFFFFF" stroke-width="22" stroke-linecap="round"/>
-  <path d="M 281 301 Q 322 276 329 234"
-        fill="none" stroke="#FFFFFF" stroke-width="22" stroke-linecap="round"/>
+  <path d="M 226 49 Q 256 22 286 49 L 468 216 Q 486 232 486 256 L 486 456 Q 486 496 446 496 L 66 496 Q 26 496 26 456 L 26 256 Q 26 232 44 216 Z" fill="#23BEE8"/>
+  <g fill="#FFFFFF">
+    <circle cx="183.2" cy="275.6" r="8.5"/>
+    <circle cx="130.2" cy="276.0" r="8.5"/>
+    <circle cx="77.2" cy="291.5" r="8.5"/>
+    <circle cx="198.7" cy="255.0" r="8.5"/>
+    <circle cx="157.0" cy="240.4" r="8.5"/>
+    <circle cx="115.3" cy="240.9" r="8.5"/>
+    <circle cx="218.5" cy="240.9" r="8.5"/>
+    <circle cx="191.3" cy="215.9" r="8.5"/>
+    <circle cx="164.1" cy="206.1" r="8.5"/>
+    <circle cx="136.8" cy="211.6" r="8.5"/>
+    <circle cx="241.7" cy="233.1" r="8.5"/>
+    <circle cx="231.3" cy="202.5" r="8.5"/>
+    <circle cx="210.4" cy="187.0" r="8.5"/>
+    <circle cx="270.3" cy="233.1" r="8.5"/>
+    <circle cx="280.7" cy="202.5" r="8.5"/>
+    <circle cx="301.6" cy="187.0" r="8.5"/>
+    <circle cx="293.5" cy="240.9" r="8.5"/>
+    <circle cx="320.7" cy="215.9" r="8.5"/>
+    <circle cx="347.9" cy="206.1" r="8.5"/>
+    <circle cx="375.2" cy="211.6" r="8.5"/>
+    <circle cx="313.3" cy="255.0" r="8.5"/>
+    <circle cx="355.0" cy="240.4" r="8.5"/>
+    <circle cx="396.7" cy="240.9" r="8.5"/>
+    <circle cx="328.8" cy="275.6" r="8.5"/>
+    <circle cx="381.8" cy="276.0" r="8.5"/>
+    <circle cx="434.8" cy="291.5" r="8.5"/>
+    <circle cx="256.0" cy="168.0" r="8.5"/>
+  </g>
+  <g fill="none" stroke="#FFFFFF" stroke-width="13" stroke-linejoin="round" stroke-linecap="round">
+    <rect x="206" y="300" width="100" height="44" rx="22" ry="22"/>
+    <rect x="244" y="344" width="24" height="16" rx="4" ry="4"/>
+    <rect x="228" y="358" width="56" height="22" rx="11" ry="11"/>
+    <rect x="240" y="380" width="32" height="120" rx="12" ry="12"/>
+    <rect x="230" y="448" width="52" height="20" rx="10" ry="10"/>
+  </g>
+  <g fill="none" stroke="#FFFFFF" stroke-width="11" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M 150 490 Q 170.0 454.0 150 418 Q 130.0 454.0 150 490 Z"/>
+    <path d="M 150 490 Q 143.3 456.8 112 444 Q 118.7 477.2 150 490 Z"/>
+    <path d="M 150 490 Q 181.5 475.9 188 442 Q 156.5 456.1 150 490 Z"/>
+    <path d="M 362 490 Q 382.0 454.0 362 418 Q 342.0 454.0 362 490 Z"/>
+    <path d="M 362 490 Q 355.3 456.8 324 444 Q 330.7 477.2 362 490 Z"/>
+    <path d="M 362 490 Q 393.5 475.9 400 442 Q 368.5 456.1 362 490 Z"/>
+  </g>
 </svg>
