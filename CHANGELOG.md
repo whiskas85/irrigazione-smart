@@ -8,6 +8,22 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Corretto
+- La validazione automatica falliva da sempre, su tutti e tre i controlli,
+  quindi nessun problema veniva mai segnalato:
+  - `hassfest` pretende le chiavi del manifest nell'ordine `domain`, `name`
+    e poi alfabetico; non lo erano
+  - il controllo `brands` di HACS vale solo per le integration del catalogo
+    ufficiale, non per una personalizzata che porta le proprie icone
+  - la CI installava `ruff` senza versione fissa: il set di regole cambiava
+    da solo a ogni rilascio e il lint poteva rompersi senza modifiche al
+    codice. Ora le regole stanno in `pyproject.toml` e la versione è fissata
+
+### Modificato
+- Le voci di lint risolte in `hydro.py` sono puramente meccaniche
+  (parentesi, `int(round())` ridondante, `if` annidati, righe lunghe): il
+  comportamento del motore è invariato e verificato dalle suite di test
+
 ## [0.2.0] - 2026-07-27
 
 Prima release utilizzabile: l'integration crea entità, espone una pagina
