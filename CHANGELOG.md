@@ -9,6 +9,24 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 ## [Unreleased]
 
 ### Aggiunto
+- **Pannello diviso in schede**: *Dashboard* (master, stato delle linee,
+  sequenza della notte), *Zone* (gestione completa delle linee e
+  impostazioni), *Meteo* (ET0, accumulo della giornata, sorgenti, posizione)
+- **Entità esposte**, usabili in automazioni, scene e dashboard:
+  - `switch` master generale — spento, nessuna linea viene irrigata
+  - `switch` master per ogni linea — esclude la singola linea
+  - `sensor` ET0 giornaliera, con il metodo di calcolo negli attributi
+  - `sensor` deficit idrico per linea, con soglia e TAW negli attributi
+  - `sensor` durata prevista per linea, con cicli e motivo negli attributi
+- Ogni linea diventa un **dispositivo** in Home Assistant, collegato a quello
+  dell'impianto: le sue entità si raggruppano da sole e si possono assegnare
+  a un'area
+- Le entità si creano e si rimuovono **a caldo** quando aggiungi o elimini
+  una zona, senza riavviare
+- Pannello ed entità restano allineati nei due sensi: spegnere il master
+  dalla pagina aggiorna l'interruttore esposto, e viceversa
+- Dashboard: sequenza della notte con orari di ogni linea e diagnosi di
+  capienza della finestra (avvisi se sfora o se esclude delle linee)
 - **Coordinator**: il bilancio idrico ora si aggiorna da solo (`coordinator.py`).
   Ogni 10 minuti campiona le sorgenti meteo e accumula gli estremi della
   giornata; dopo la mezzanotte chiude il giorno, calcola ET0 e aggiorna il

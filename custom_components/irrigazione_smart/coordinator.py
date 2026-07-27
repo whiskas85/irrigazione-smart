@@ -19,6 +19,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_LATITUDE
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
@@ -30,6 +31,7 @@ from .const import (
     CONF_TEMPERATURE_ENTITY,
     CONF_WEATHER_ENTITY,
     CONF_WIND_ENTITY,
+    SIGNAL_STATE_CHANGED,
     UPDATE_INTERVAL_MIN,
 )
 from .hydro import compute_et0, resolve_zone_params, update_deficit
@@ -247,6 +249,8 @@ class IrrigazioneCoordinator(DataUpdateCoordinator):
             "Giorno %s chiuso: ET0 %.2f mm (%s), pioggia %.1f mm, %d zone aggiornate",
             daily.get("date"), et0.value_mm, et0.method, rain_mm, len(self._store.zones),
         )
+        # i sensori esposti leggono lo store: vanno riallineati subito
+        async_dispatcher_send(self.hass, SIGNAL_STATE_CHANGED)
 
         return {
             "last_et0_mm": round(et0.value_mm, 2),

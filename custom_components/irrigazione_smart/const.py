@@ -26,5 +26,9 @@ STORAGE_SAVE_DELAY: Final = 10  # secondi di debounce: protegge la SD del Pi
 # giornata, non a reagire in tempo reale: 10 minuti bastano e non pesano.
 UPDATE_INTERVAL_MIN: Final = 10
 
-# Le platform si popolano dalla fase 3 in poi (vedi SPEC.md §11)
-PLATFORMS: Final[list[Platform]] = []
+PLATFORMS: Final[list[Platform]] = [Platform.SWITCH, Platform.SENSOR]
+
+# Segnali interni: le zone si creano a runtime, quindi le entità vanno
+# aggiunte e rimosse a caldo senza riavviare Home Assistant.
+SIGNAL_ZONES_CHANGED: Final = f"{DOMAIN}_zones_changed"
+SIGNAL_STATE_CHANGED: Final = f"{DOMAIN}_state_changed"

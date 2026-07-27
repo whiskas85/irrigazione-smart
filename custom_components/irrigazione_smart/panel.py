@@ -18,6 +18,8 @@ from homeassistant.components.http import HomeAssistantView, StaticPathConfig
 from homeassistant.const import CONF_LATITUDE, CONF_LONGITUDE
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import Unauthorized
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.loader import async_get_integration
 
 from .const import (
@@ -29,14 +31,18 @@ from .const import (
     CONF_WEATHER_ENTITY,
     CONF_WIND_ENTITY,
     DOMAIN,
+    SIGNAL_STATE_CHANGED,
+    SIGNAL_ZONES_CHANGED,
 )
 from .hydro import (
     EMITTER_EFFICIENCY,
     SOIL_PROPS,
     ZONE_PRESETS,
+    RunPlan,
     TimeWindow,
     evaluate_zone,
     resolve_zone_params,
+    schedule_sequence,
     window_quality,
 )
 from .store import IrrigazioneStore
@@ -68,18 +74,29 @@ def _entry_config(hass: HomeAssistant) -> dict[str, Any] | None:
     return dict(entries[0].data) if entries else None
 
 
-def _zone_computed(
-    zone: dict[str, Any], system: dict[str, Any], wind_kmh: float = 0.0
-) -> dict[str, Any]:
-    """Valori derivati di una zona, calcolati con il motore idrico.
+def _notify(hass: HomeAssistant, zones_changed: bool = False) -> None:
+    """Allinea le entità esposte dopo una modifica fatta dal pannello."""
+    if zones_changed:
+        async_dispatcher_send(hass, SIGNAL_ZONES_CHANGED)
+    async_dispatcher_send(hass, SIGNAL_STATE_CHANGED)
 
-    Si usa `evaluate_zone` e non direttamente `build_run_plan` così la
-    pagina mostra anche i blocchi (vento, pausa, zona disattivata) con lo
-    stesso criterio che userà l'esecuzione.
-    """
-    params = resolve_zone_params(zone, system)
+
+def _remove_zone_device(hass: HomeAssistant, zone_id: str) -> None:
+    """Elimina il dispositivo della linea, e con esso le sue entità."""
+    entries = hass.config_entries.async_entries(DOMAIN)
+    if not entries:
+        return
+    registry = dr.async_get(hass)
+    device = registry.async_get_device(
+        identifiers={(DOMAIN, f"{entries[0].entry_id}_{zone_id}")}
+    )
+    if device is not None:
+        registry.async_remove_device(device.id)
+
+
+def _zone_computed(zone: dict[str, Any], params, plan: RunPlan) -> dict[str, Any]:
+    """Valori derivati di una zona, già calcolati con il motore idrico."""
     deficit = float(zone.get("deficit_mm") or 0.0)
-    plan = evaluate_zone(zone, system, deficit, wind_kmh=wind_kmh)
 
     return {
         "taw_mm": round(params.taw_mm, 1),
@@ -118,15 +135,22 @@ def _build_overview(hass: HomeAssistant) -> dict[str, Any]:
     wind_kmh = float(cdata.get("wind_kmh") or 0.0)
 
     system = store.system
-    zones = [
-        {**zone, "computed": _zone_computed(zone, system, wind_kmh)}
-        for zone in store.zones_sorted()
-    ]
-
     window = TimeWindow.from_strings(
         system.get("window_start", "04:00"), system.get("window_end", "08:00")
     )
     level, why = window_quality(window)
+
+    # Un solo passaggio sul motore: gli stessi piani servono sia alle righe
+    # delle zone sia alla sequenza della notte.
+    zones: list[dict[str, Any]] = []
+    plans: list[tuple[str, str, RunPlan]] = []
+    for zone in store.zones_sorted():
+        params = resolve_zone_params(zone, system)
+        plan = evaluate_zone(
+            zone, system, float(zone.get("deficit_mm") or 0.0), wind_kmh=wind_kmh
+        )
+        zones.append({**zone, "computed": _zone_computed(zone, params, plan)})
+        plans.append((zone["id"], zone.get("name", ""), plan))
 
     return {
         "configured": True,
@@ -151,12 +175,47 @@ def _build_overview(hass: HomeAssistant) -> dict[str, Any]:
             },
         },
         "zones": zones,
+        "schedule": _schedule_payload(plans, window, system),
         "meteo": _meteo_payload(cdata, store),
         "options": {
             "zone_types": sorted(ZONE_PRESETS),
             "soils": sorted(SOIL_PROPS),
             "emitters": sorted(EMITTER_EFFICIENCY),
         },
+    }
+
+
+def _schedule_payload(
+    plans: list[tuple[str, str, RunPlan]],
+    window: TimeWindow,
+    system: dict[str, Any],
+) -> dict[str, Any]:
+    """Sequenza della notte con la diagnosi di capienza della finestra."""
+    sched = schedule_sequence(
+        plans,
+        window,
+        gap_minutes=int(system.get("gap_minutes", 5) or 0),
+        allow_overflow=system.get("overflow_policy") != "truncate",
+    )
+
+    return {
+        "runs": [
+            {
+                "zone_id": run.zone_id,
+                "zone_name": run.zone_name,
+                "start": run.start_hhmm,
+                "end": run.end_hhmm,
+                "minutes": round(run.plan.wall_clock_minutes, 1),
+                "cycles": run.plan.cycles,
+            }
+            for run in sched.runs
+        ],
+        "total_minutes": sched.total_minutes,
+        "window_minutes": window.duration_min,
+        "utilization": round(sched.utilization * 100, 0),
+        "fits": sched.fits,
+        "overflow_minutes": sched.overflow_minutes,
+        "dropped": sched.dropped,
     }
 
 
@@ -210,6 +269,7 @@ class ZonesView(HomeAssistantView):
 
         payload = await request.json()
         zone = store.async_create_zone(payload)
+        _notify(hass, zones_changed=True)
         return self.json({"zone": zone, "overview": _build_overview(hass)})
 
 
@@ -231,6 +291,7 @@ class ZoneDetailView(HomeAssistantView):
         zone = store.async_update_zone(zone_id, payload)
         if zone is None:
             return self.json_message("Zona non trovata", 404)
+        _notify(hass)
         return self.json({"zone": zone, "overview": _build_overview(hass)})
 
     async def delete(self, request, zone_id: str):
@@ -242,6 +303,8 @@ class ZoneDetailView(HomeAssistantView):
 
         if not store.async_delete_zone(zone_id):
             return self.json_message("Zona non trovata", 404)
+        _remove_zone_device(hass, zone_id)
+        _notify(hass, zones_changed=True)
         return self.json({"overview": _build_overview(hass)})
 
 
@@ -261,6 +324,7 @@ class SystemView(HomeAssistantView):
 
         payload = await request.json()
         store.async_update_system(payload)
+        _notify(hass)
         return self.json({"overview": _build_overview(hass)})
 
 
