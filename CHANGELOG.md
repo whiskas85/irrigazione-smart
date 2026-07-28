@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-28
+
 ### Aggiunto
 - **L'irrigazione ora parte da sola** (`scheduler.py`). Prima il sistema
   calcolava il bilancio e mostrava il piano, ma nessuno apriva le valvole
