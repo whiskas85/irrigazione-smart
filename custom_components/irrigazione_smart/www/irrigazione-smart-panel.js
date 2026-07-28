@@ -202,6 +202,13 @@ class IrrigazioneSmartPanel extends HTMLElement {
     }, busy ? 3000 : 30000);
   }
 
+  /* True se il fuoco è dentro a un campo del pannello. */
+  _isTyping() {
+    const active = this.shadowRoot && this.shadowRoot.activeElement;
+    if (!active) return false;
+    return ["INPUT", "SELECT", "TEXTAREA"].includes(active.tagName);
+  }
+
   async _refreshSilent() {
     // non ricaricare mentre l'utente sta compilando un dialogo
     if (!this._hass || this.shadowRoot.querySelector("ha-dialog")) return;
@@ -211,15 +218,23 @@ class IrrigazioneSmartPanel extends HTMLElement {
       this._overview = fresh;
 
       // il registro si aggiorna solo quando lo si sta guardando
+      let logChanged = false;
       if (this._tab === "log") {
         const res = await this._api("GET", "log");
         const entries = (res && res.entries) || [];
         if (JSON.stringify(entries) !== JSON.stringify(this._log)) {
           this._log = entries;
-          changed = true;
+          logChanged = true;
         }
       }
-      if (changed) this._render();
+
+      // Se l'utente sta scrivendo, ridisegnare tutto gli toglierebbe il
+      // campo da sotto le dita: si aggiorna solo la lista.
+      if (this._isTyping()) {
+        if (logChanged) this._updateLogList();
+        return;
+      }
+      if (changed || logChanged) this._render();
     } catch (_e) {
       /* un errore di rete transitorio non deve svuotare la pagina */
     }
@@ -482,28 +497,32 @@ class IrrigazioneSmartPanel extends HTMLElement {
       );
     });
 
-    // ricerca nel registro: si ridisegna solo la lista, senza perdere il
-    // cursore dentro al campo
+    // Ricerca nel registro. Si aggiorna solo l'elenco: ridisegnare tutta
+    // la pagina distruggeva il campo, il fuoco si perdeva e i tasti
+    // successivi arrivavano alle scorciatoie di Home Assistant (la "e"
+    // apre la ricerca delle entità).
     const search = sr.querySelector(".log-search");
     if (search) {
       search.addEventListener("input", (e) => {
         this._logQuery = e.target.value;
-        const pos = e.target.selectionStart;
-        this._render();
-        const again = this.shadowRoot.querySelector(".log-search");
-        if (again) {
-          again.focus();
-          again.setSelectionRange(pos, pos);
-        }
+        this._updateLogList();
       });
     }
     const range = sr.querySelector(".log-range");
     if (range) {
       range.addEventListener("change", (e) => {
         this._logDays = Number(e.target.value);
-        this._render();
+        this._updateLogList();
       });
     }
+
+    // I tasti premuti dentro ai nostri campi non devono raggiungere le
+    // scorciatoie globali di Home Assistant.
+    sr.querySelectorAll("input, select, textarea").forEach((el) => {
+      el.addEventListener("keydown", (ev) => ev.stopPropagation());
+      el.addEventListener("keyup", (ev) => ev.stopPropagation());
+      el.addEventListener("keypress", (ev) => ev.stopPropagation());
+    });
 
     onClick(".clear-log", async () => {
       try {
@@ -964,12 +983,10 @@ class IrrigazioneSmartPanel extends HTMLElement {
     });
   }
 
-  _logTab() {
-    if (this._log === undefined) {
-      this._fetchLog();
-      return `<div class="empty">Caricamento…</div>`;
-    }
-
+  /* Voci filtrate e raggruppate per giornata. Separato dal disegno, così
+     scrivendo nella ricerca si può aggiornare la sola lista senza
+     ricostruire la pagina — e senza perdere il fuoco dal campo. */
+  _logGroups() {
     const days = this._logDays ?? 7;
     const query = (this._logQuery || "").trim().toLowerCase();
 
@@ -977,7 +994,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
     cutoff.setDate(cutoff.getDate() - days);
     cutoff.setHours(0, 0, 0, 0);
 
-    const filtered = this._log.filter((e) => {
+    const filtered = (this._log || []).filter((e) => {
       const d = new Date(e.ts);
       if (!isNaN(d) && days > 0 && d < cutoff) return false;
       return !query || (e.text || "").toLowerCase().includes(query);
@@ -996,8 +1013,13 @@ class IrrigazioneSmartPanel extends HTMLElement {
       group.items.push(entry);
     });
 
+    return { groups, filtered };
+  }
+
+  _logListHtml() {
+    const { groups } = this._logGroups();
     const two = (n) => String(n).padStart(2, "0");
-    const body = groups.length
+    return groups.length
       ? groups
           .map(
             (g) => `<div class="log-day">${esc(g.label)}</div>
@@ -1023,6 +1045,16 @@ class IrrigazioneSmartPanel extends HTMLElement {
                : "Qui finiscono avvii, irrigazioni concluse e linee non partite."
            }</p>
          </div>`;
+  }
+
+  _logTab() {
+    if (this._log === undefined) {
+      this._fetchLog();
+      return `<div class="empty">Caricamento…</div>`;
+    }
+
+    const days = this._logDays ?? 7;
+    const { filtered } = this._logGroups();
 
     const ranges = [
       { value: 1, label: "Oggi" },
@@ -1061,10 +1093,24 @@ class IrrigazioneSmartPanel extends HTMLElement {
           </div>
         </div>
       </div>
-      <p class="muted small nomargin">${filtered.length} di ${this._log.length} voci</p>
+      <p class="muted small nomargin log-count">${filtered.length} di ${this._log.length} voci</p>
 
-      ${body}
+      <div class="log-list">${this._logListHtml()}</div>
     </div></ha-card>`;
+  }
+
+  /* Aggiorna solo l'elenco e il conteggio: il campo di ricerca resta lo
+     stesso elemento, quindi non perde il fuoco e i tasti successivi non
+     finiscono alle scorciatoie di Home Assistant. */
+  _updateLogList() {
+    const list = this.shadowRoot.querySelector(".log-list");
+    if (list) list.innerHTML = this._logListHtml();
+
+    const count = this.shadowRoot.querySelector(".log-count");
+    if (count) {
+      const { filtered } = this._logGroups();
+      count.textContent = `${filtered.length} di ${(this._log || []).length} voci`;
+    }
   }
 
   // --------------------------------------------------------- DASHBOARD

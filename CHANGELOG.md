@@ -8,6 +8,18 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Corretto
+- **La ricerca nel registro accettava una lettera sola.** A ogni tasto si
+  ridisegnava l'intera pagina, distruggendo il campo: il cursore spariva e
+  i tasti successivi finivano alle scorciatoie di Home Assistant, che
+  aprivano la ricerca delle entità. Ora si aggiorna soltanto l'elenco, il
+  campo resta lo stesso elemento e non perde mai il fuoco
+- I tasti premuti dentro ai campi del pannello non raggiungono più le
+  scorciatoie globali di Home Assistant
+- L'aggiornamento automatico della pagina non interviene mentre si sta
+  scrivendo: aggiorna solo la lista, senza togliere il campo da sotto le
+  dita
+
 ## [0.7.0] - 2026-07-28
 
 ### Aggiunto
