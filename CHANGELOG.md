@@ -8,6 +8,35 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Aggiunto
+- **Mappa del giardino.** Nuova scheda con la planimetria — una foto
+  aerea, un disegno, uno screenshot di una mappa — e sopra le aree
+  irrigate, disegnate a mano. Ogni area prende il colore dal bilancio
+  idrico della sua linea: trasparente se sta bene, gialla se chiede
+  acqua, rossa in carenza forte, azzurra pulsante mentre irriga. È la
+  risposta a colpo d'occhio a una domanda che le liste rendono faticosa:
+  *dove* manca acqua
+  - Toccare un'area, o la sua icona, fa partire l'irrigazione di quella
+    linea. Vale anche il poligono e non solo l'icona: su un telefono
+    centrare un'icona è più difficile che toccare il prato
+  - Le aree si disegnano posando i vertici sull'immagine, si correggono
+    trascinando le maniglie, si allargano dai punti a metà lato e si
+    spostano tutte insieme trascinandone l'interno. Possono
+    sovrapporsi: l'ordine di disegno decide chi sta sopra
+  - Di ogni area si scelgono nome, linea collegata, colore del bordo,
+    icona e suo colore, e un'entità da mostrare sotto l'icona. Il
+    riempimento no: quello lo dice il bilancio idrico, ed è tutto il
+    motivo per cui la pagina esiste
+  - L'immagine si carica dal pannello e viene conservata **intera**. Non
+    passa da `image_upload` di Home Assistant, che serve solo miniature
+    quadrate da 512 pixel: una planimetria ritagliata a quadrato non si
+    legge più. In alternativa si può indicare un indirizzo, per chi il
+    file ce l'ha già in `www/`
+  - Le coordinate sono normalizzate sui lati dell'immagine: la stessa
+    mappa regge telefono e desktop, e cambiare planimetria con una a
+    risoluzione diversa non butta via il disegno
+  - Dalla barra in alto si avvia l'irrigazione di tutte le aree
+
 ## [0.9.4] - 2026-07-28
 
 ### Aggiunto

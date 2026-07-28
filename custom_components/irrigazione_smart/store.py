@@ -167,6 +167,70 @@ DEFAULT_DAILY: dict[str, Any] = {
 # una stagione senza far crescere il file all'infinito.
 HISTORY_DAYS: int = 90
 
+# ---------------------------------------------------------------- mappa
+#
+# La planimetria del giardino con le aree disegnate sopra. Il file non
+# vive qui: sta in `.storage/irrigazione_smart/`, e qui se ne conserva
+# solo il nome. In alternativa si può puntare un indirizzo qualunque
+# (tipico: un file in `www/`, servito come `/local/...`), per chi il file
+# ce l'ha già dove vuole lui.
+
+DEFAULT_MAP: dict[str, Any] = {
+    "image_id": None,
+    "image_ext": None,
+    "image_url": None,
+    "image_name": None,
+    # trasparenza del riempimento delle aree: la planimetria sotto deve
+    # restare leggibile
+    "fill_opacity": 0.35,
+    "areas": {},
+}
+
+# Un'area è un poligono sopra l'immagine, di norma legato a una linea.
+#
+# I vertici sono in coordinate **normalizzate 0..1** sui lati
+# dell'immagine, non in pixel: la stessa mappa deve reggere lo schermo
+# del telefono e quello del desktop, e una planimetria sostituita con una
+# a risoluzione diversa non deve buttare via il disegno.
+AREA_FIELDS: dict[str, Any] = {
+    "name": "Nuova area",
+    # linea irrigata da quest'area: da qui arrivano stato e comando
+    "zone_id": None,
+    "points": [],
+    # Colore identificativo del bordo. Il *riempimento* non si configura:
+    # dice il bilancio idrico, ed è tutto il punto della mappa.
+    "color": None,
+    "icon": None,
+    "icon_color": None,
+    # entità mostrata dall'icona, per chi vuole vederci altro (un sensore
+    # di umidità del terreno, la valvola stessa)
+    "icon_entity": None,
+    # posizione dell'icona; vuota = baricentro del poligono
+    "icon_x": None,
+    "icon_y": None,
+    "show_icon": True,
+    "show_label": True,
+    "order": 0,
+}
+
+
+def clean_points(raw: Any) -> list[list[float]]:
+    """Vertici validi e dentro l'immagine, scartando il resto.
+
+    Arriva dal pannello, che è amministratore, ma un disegno storto o un
+    payload monco non devono poter rompere il rendering della pagina.
+    """
+    points: list[list[float]] = []
+    for point in raw or []:
+        try:
+            x, y = float(point[0]), float(point[1])
+        except (TypeError, ValueError, IndexError, KeyError):
+            continue
+        points.append(
+            [round(max(0.0, min(1.0, x)), 5), round(max(0.0, min(1.0, y)), 5)]
+        )
+    return points
+
 
 def resolve_rate_mm_h(zone: dict[str, Any]) -> float:
     """Portata in mm/h, comunque l'utente l'abbia inserita.
@@ -220,6 +284,7 @@ class IrrigazioneStore:
                 "actions": stored.get("actions") or {},
                 "groups": stored.get("groups") or {},
                 "history": stored.get("history") or [],
+                "map": {**DEFAULT_MAP, **(stored.get("map") or {})},
             }
         else:
             self._data = {
@@ -230,6 +295,7 @@ class IrrigazioneStore:
                 "actions": {},
                 "groups": {},
                 "history": [],
+                "map": dict(DEFAULT_MAP),
             }
 
         self._ensure_groups()
@@ -460,6 +526,79 @@ class IrrigazioneStore:
 
         self._save()
         return group
+
+    # ---------------------------------------------------------- mappa
+
+    @property
+    def map(self) -> dict[str, Any]:
+        return self._data["map"]
+
+    @property
+    def areas(self) -> dict[str, Any]:
+        return self._data["map"]["areas"]
+
+    def areas_sorted(self) -> list[dict[str, Any]]:
+        """Aree in ordine di disegno: le prime stanno sotto.
+
+        L'ordine conta perché le aree possono sovrapporsi, e chi disegna
+        un'aiuola dentro un prato vuole vedere l'aiuola.
+        """
+        return sorted(
+            self._data["map"]["areas"].values(),
+            key=lambda a: (a.get("order", 0), a.get("name", "")),
+        )
+
+    def async_update_map(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Aggiorna le impostazioni della mappa (immagine, trasparenza)."""
+        current = self._data["map"]
+        for key in DEFAULT_MAP:
+            if key == "areas" or key not in payload:
+                continue
+            current[key] = payload[key]
+
+        # Immagine caricata e indirizzo manuale si escludono: tenerli
+        # entrambi renderebbe ambiguo quale delle due si vede.
+        if payload.get("image_id"):
+            current["image_url"] = None
+        elif payload.get("image_url"):
+            current["image_id"] = None
+
+        self._save()
+        return current
+
+    def async_create_area(self, payload: dict[str, Any]) -> dict[str, Any]:
+        areas = self._data["map"]["areas"]
+        area_id = ulid_now()
+        area: dict[str, Any] = {"id": area_id}
+        for key, default in AREA_FIELDS.items():
+            area[key] = payload.get(key, default)
+        area["points"] = clean_points(area["points"])
+        if not area.get("order"):
+            area["order"] = len(areas) + 1
+
+        areas[area_id] = area
+        self._save()
+        return area
+
+    def async_update_area(
+        self, area_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        area = self._data["map"]["areas"].get(area_id)
+        if area is None:
+            return None
+        for key in AREA_FIELDS:
+            if key in payload:
+                area[key] = payload[key]
+        area["points"] = clean_points(area.get("points"))
+        self._save()
+        return area
+
+    def async_delete_area(self, area_id: str) -> bool:
+        if area_id not in self._data["map"]["areas"]:
+            return False
+        del self._data["map"]["areas"][area_id]
+        self._save()
+        return True
 
     @property
     def notifications(self) -> dict[str, Any]:

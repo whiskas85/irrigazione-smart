@@ -14,6 +14,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
+from aiohttp import web
 from homeassistant.components import frontend, panel_custom
 from homeassistant.components.http import HomeAssistantView, StaticPathConfig
 from homeassistant.const import CONF_LATITUDE, CONF_LONGITUDE
@@ -21,6 +22,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import Unauthorized
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.storage import STORAGE_DIR
 from homeassistant.loader import async_get_integration
 from homeassistant.util import dt as dt_util
 
@@ -55,7 +57,7 @@ from .hydro import (
 from .logbook import get_log
 from .notifier import HOOK_LABELS, build_context, get_notifier
 from .scheduler import get_scheduler
-from .store import WEEKDAYS, IrrigazioneStore
+from .store import WEEKDAYS, IrrigazioneStore, ulid_now
 
 PANEL_URL_PATH = "irrigazione-smart"
 PANEL_TITLE = "Irrigazione"
@@ -66,6 +68,20 @@ STATIC_URL = "/irrigazione_smart_frontend"
 _HTTP_FLAG = "_http_registered"
 _PANEL_FLAG = "_panel_registered"
 _STORE = "store"
+
+# Formati accettati per la planimetria, con l'estensione con cui il file
+# viene salvato. Si controlla il tipo dichiarato e non l'estensione del
+# nome: è l'unica delle due che il browser calcola davvero.
+IMAGE_EXTENSIONS: dict[str, str] = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "image/svg+xml": ".svg",
+}
+# Una foto aerea di un giardino sta ampiamente sotto: oltre, è quasi
+# sempre un file scelto per sbaglio.
+MAX_IMAGE_BYTES = 12 * 1024 * 1024
 
 
 def _get_store(hass: HomeAssistant) -> IrrigazioneStore | None:
@@ -211,6 +227,7 @@ def _build_overview(hass: HomeAssistant) -> dict[str, Any]:
         },
         "zones": zones,
         "groups": _groups_payload(hass, store, plans),
+        "map": _map_payload(store),
         "running": executor.status() if executor else {"active": False},
         "flow": _flow_payload(hass, system),
         "schedule": _schedule_payload(plans, window, system),
@@ -269,6 +286,35 @@ def _groups_payload(
         }
 
     return out
+
+
+def _map_image_path(hass: HomeAssistant, image_id: str, extension: str) -> Path:
+    """Percorso su disco della planimetria caricata."""
+    return Path(hass.config.path(STORAGE_DIR, DOMAIN, f"{image_id}{extension}"))
+
+
+def _map_payload(store: IrrigazioneStore) -> dict[str, Any]:
+    """Planimetria e aree disegnate sopra.
+
+    L'indirizzo dell'immagine si risolve qui e non nel pannello: la
+    pagina deve limitarsi a mostrarlo, senza sapere se dietro c'è un file
+    caricato o un percorso scritto a mano.
+    """
+    settings = store.map
+    image_id = settings.get("image_id")
+
+    if image_id:
+        # l'identificativo nell'indirizzo cambia a ogni caricamento: è
+        # ciò che costringe il browser a rileggere la nuova planimetria
+        image_src = f"/api/irrigazione_smart/map/image/{image_id}"
+    else:
+        image_src = settings.get("image_url") or None
+
+    return {
+        **{k: v for k, v in settings.items() if k != "areas"},
+        "image_src": image_src,
+        "areas": store.areas_sorted(),
+    }
 
 
 def _flow_payload(hass: HomeAssistant, system: dict[str, Any]) -> dict[str, Any]:
@@ -578,6 +624,178 @@ class GroupView(HomeAssistantView):
         return self.json({"overview": _build_overview(hass)})
 
 
+class MapView(HomeAssistantView):
+    """Impostazioni della mappa: immagine di sfondo e trasparenza."""
+
+    url = "/api/irrigazione_smart/map"
+    name = "api:irrigazione_smart:map"
+    requires_auth = True
+
+    async def post(self, request):
+        _require_admin(request)
+        hass: HomeAssistant = request.app["hass"]
+        store = _get_store(hass)
+        if store is None:
+            return self.json_message("Integration non configurata", 400)
+
+        store.async_update_map(await request.json())
+        _notify(hass)
+        return self.json({"overview": _build_overview(hass)})
+
+
+class MapImageView(HomeAssistantView):
+    """Caricamento della planimetria.
+
+    Home Assistant ha `image_upload`, ma serve solo miniature quadrate di
+    256 o 512 pixel: una planimetria ritagliata a quadrato e ridotta a
+    512 non si legge più. Il file si tiene quindi per intero, come
+    caricato, accanto agli altri dati dell'integration.
+    """
+
+    url = "/api/irrigazione_smart/map/image"
+    name = "api:irrigazione_smart:map_image"
+    requires_auth = True
+
+    async def post(self, request):
+        _require_admin(request)
+        hass: HomeAssistant = request.app["hass"]
+        store = _get_store(hass)
+        if store is None:
+            return self.json_message("Integration non configurata", 400)
+
+        try:
+            data = await request.post()
+        except ValueError:
+            return self.json_message("Immagine troppo grande", 413)
+
+        upload = data.get("file")
+        content_type = getattr(upload, "content_type", None)
+        if upload is None or content_type not in IMAGE_EXTENSIONS:
+            return self.json_message(
+                "Serve un'immagine PNG, JPEG, WEBP, GIF o SVG", 400
+            )
+
+        payload = upload.file.read()
+        if len(payload) > MAX_IMAGE_BYTES:
+            return self.json_message(
+                f"L'immagine supera {MAX_IMAGE_BYTES // (1024 * 1024)} MB", 413
+            )
+
+        settings = store.map
+        previous = (
+            _map_image_path(hass, settings["image_id"], settings.get("image_ext") or "")
+            if settings.get("image_id")
+            else None
+        )
+
+        image_id = ulid_now()
+        extension = IMAGE_EXTENSIONS[content_type]
+        target = _map_image_path(hass, image_id, extension)
+
+        def _write() -> None:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(payload)
+            # la planimetria precedente non serve più a nessuno
+            if previous is not None and previous != target:
+                previous.unlink(missing_ok=True)
+
+        await hass.async_add_executor_job(_write)
+
+        store.async_update_map(
+            {
+                "image_id": image_id,
+                "image_ext": extension,
+                "image_name": getattr(upload, "filename", None),
+                "image_url": None,
+            }
+        )
+        _notify(hass)
+        return self.json({"overview": _build_overview(hass)})
+
+
+class MapImageServeView(HomeAssistantView):
+    """Serve la planimetria caricata.
+
+    Senza autenticazione, come fa `image_upload` di Home Assistant per le
+    sue: un tag `img` non può portarsi dietro il token. L'indirizzo
+    contiene un identificativo casuale e si serve **solo** la planimetria
+    attualmente configurata, quindi non c'è modo di farsi restituire un
+    file arbitrario passando un percorso costruito ad arte.
+    """
+
+    url = "/api/irrigazione_smart/map/image/{image_id}"
+    name = "api:irrigazione_smart:map_image_serve"
+    requires_auth = False
+
+    async def get(self, request, image_id: str):
+        hass: HomeAssistant = request.app["hass"]
+        store = _get_store(hass)
+        if store is None:
+            return web.Response(status=404)
+
+        settings = store.map
+        if not settings.get("image_id") or settings["image_id"] != image_id:
+            return web.Response(status=404)
+
+        path = _map_image_path(hass, image_id, settings.get("image_ext") or "")
+        if not await hass.async_add_executor_job(path.is_file):
+            return web.Response(status=404)
+
+        return web.FileResponse(path)
+
+
+class AreasView(HomeAssistantView):
+    """Creazione di un'area sulla mappa."""
+
+    url = "/api/irrigazione_smart/areas"
+    name = "api:irrigazione_smart:areas"
+    requires_auth = True
+
+    async def post(self, request):
+        _require_admin(request)
+        hass: HomeAssistant = request.app["hass"]
+        store = _get_store(hass)
+        if store is None:
+            return self.json_message("Integration non configurata", 400)
+
+        area = store.async_create_area(await request.json())
+        _notify(hass)
+        return self.json({"area": area, "overview": _build_overview(hass)})
+
+
+class AreaDetailView(HomeAssistantView):
+    """Modifica ed eliminazione di un'area."""
+
+    url = "/api/irrigazione_smart/areas/{area_id}"
+    name = "api:irrigazione_smart:area_detail"
+    requires_auth = True
+
+    async def post(self, request, area_id: str):
+        _require_admin(request)
+        hass: HomeAssistant = request.app["hass"]
+        store = _get_store(hass)
+        if store is None:
+            return self.json_message("Integration non configurata", 400)
+
+        area = store.async_update_area(area_id, await request.json())
+        if area is None:
+            return self.json_message("Area non trovata", 404)
+        _notify(hass)
+        return self.json({"area": area, "overview": _build_overview(hass)})
+
+    async def delete(self, request, area_id: str):
+        _require_admin(request)
+        hass: HomeAssistant = request.app["hass"]
+        store = _get_store(hass)
+        if store is None:
+            return self.json_message("Integration non configurata", 400)
+
+        if not store.async_delete_area(area_id):
+            return self.json_message("Area non trovata", 404)
+        _notify(hass)
+        return self.json({"overview": _build_overview(hass)})
+
+
 class ItemsView(HomeAssistantView):
     """Creazione di notifiche e azioni."""
 
@@ -792,6 +1010,12 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
         hass.http.register_view(LogView())
         hass.http.register_view(SourcesView())
         hass.http.register_view(GroupView())
+        hass.http.register_view(MapView())
+        hass.http.register_view(MapImageView())
+        hass.http.register_view(MapImageServeView())
+        # prima di AreaDetailView, per lo stesso motivo di ZoneReorderView
+        hass.http.register_view(AreasView())
+        hass.http.register_view(AreaDetailView())
         hass.http.register_view(ItemsView())
         hass.http.register_view(ItemDetailView())
         hass.http.register_view(RunView())

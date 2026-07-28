@@ -23,6 +23,7 @@ const SENSORS = [
    sono impianti diversi con orari propri e vanno tenuti separati. */
 const BASE_TABS = [
   { id: "dashboard", label: "Dashboard", icon: "mdi:view-dashboard-outline" },
+  { id: "mappa", label: "Mappa", icon: "mdi:map-outline" },
 ];
 const TAIL_TABS = [
   { id: "meteo", label: "Meteo", icon: "mdi:weather-partly-cloudy" },
@@ -185,6 +186,22 @@ class IrrigazioneSmartPanel extends HTMLElement {
     this._loading = false;
     this._error = null;
     this._tab = "dashboard";
+    // stato della mappa: vive nel componente, non nel server, perché
+    // descrive cosa sta facendo l'utente adesso e non cosa è configurato
+    this._mapEdit = false;
+    this._selArea = null;
+    this._selVertex = null;
+    this._draft = null;
+    this._mapDragging = false;
+  }
+
+  /* True mentre si sta disegnando o trascinando sulla mappa.
+
+     Un ridisegno dell'intera pagina in quel momento toglierebbe da sotto
+     le dita il vertice che si sta spostando: stessa ragione per cui non
+     si ridisegna mentre si scrive in un campo. */
+  _mapBusy() {
+    return this._tab === "mappa" && (this._mapDragging || !!this._draft);
   }
 
   set hass(hass) {
@@ -255,8 +272,14 @@ class IrrigazioneSmartPanel extends HTMLElement {
 
       // Se l'utente sta scrivendo, ridisegnare tutto gli toglierebbe il
       // campo da sotto le dita: si aggiorna solo la lista.
-      if (this._isTyping()) {
+      if (this._isTyping() || this._mapBusy()) {
         if (logChanged) this._updateLogList();
+        return;
+      }
+      // sulla mappa basta rifare i poligoni: ridisegnare la pagina
+      // intera farebbe saltare lo scorrimento a ogni giro
+      if ((changed || logChanged) && this._tab === "mappa") {
+        this._repaintMap();
         return;
       }
       if (changed || logChanged) this._render();
@@ -345,7 +368,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
   _softRender() {
     clearTimeout(this._softTimer);
     this._softTimer = setTimeout(() => {
-      if (this._isTyping()) return;
+      if (this._isTyping() || this._mapBusy()) return;
       if (this.shadowRoot.querySelector("ha-dialog, .dlg-fallback")) return;
       this._render();
     }, 700);
@@ -457,6 +480,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
       this._tab = e.currentTarget.getAttribute("data-tab");
       this._render();
     });
+    if (this._tab === "mappa") this._bindMap();
     onClick(".add-zone", () => this._openZoneDialog(null));
     onClick(".edit-zone", (e) =>
       this._openZoneDialog(e.currentTarget.getAttribute("data-id"))
@@ -728,6 +752,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
       : "";
 
     if (this._tab.startsWith("g:")) return err + this._groupTab(this._tab.slice(2));
+    if (this._tab === "mappa") return err + this._mapTab();
     if (this._tab === "meteo") return err + this._meteoTab();
     if (this._tab === "log") return err + this._logTab();
     if (this._tab === "azioni") return err + this._actionsTab();
@@ -1846,6 +1871,810 @@ class IrrigazioneSmartPanel extends HTMLElement {
 
   // ------------------------------------------------------------- METEO
 
+  /* ---------------------------------------------------------------------
+     MAPPA
+
+     La planimetria del giardino con le aree disegnate sopra. Il colore
+     del riempimento non si configura: lo decide il bilancio idrico, ed è
+     tutto il motivo per cui questa pagina esiste — si guarda la foto e si
+     capisce dove manca acqua senza leggere un numero.
+
+     I vertici sono in coordinate 0..1 sui lati dell'immagine, quindi il
+     disegno regge il telefono e il desktop senza ridisegnarlo. Il
+     riquadro segue esattamente l'immagine (`width:100%; height:auto`),
+     così l'SVG sovrapposto combacia con `preserveAspectRatio="none"`
+     senza calcoli di lettering.
+     --------------------------------------------------------------------- */
+
+  _mapData() {
+    const map = (this._overview && this._overview.map) || {};
+    return { map, areas: map.areas || [] };
+  }
+
+  _areaById(id) {
+    return this._mapData().areas.find((a) => a.id === id) || null;
+  }
+
+  _areaZone(area) {
+    if (!area || !area.zone_id) return null;
+    return (this._overview.zones || []).find((z) => z.id === area.zone_id) || null;
+  }
+
+  /* Stato dell'area: quello della linea collegata, così mappa, dashboard
+     e scheda del gruppo raccontano la stessa cosa. */
+  _areaStatus(area) {
+    const zone = this._areaZone(area);
+    if (!zone) return { level: "none", label: "nessuna linea collegata" };
+    return zoneStatus(zone, (this._overview.running || {}).zone_id || null);
+  }
+
+  _areaIcon(area) {
+    if (area.icon) return area.icon;
+    const zone = this._areaZone(area);
+    if (zone) return zone.icon || ZONE_TYPE_ICONS[zone.zone_type] || "mdi:sprinkler";
+    return "mdi:vector-polygon";
+  }
+
+  /* Baricentro del poligono (formula dell'area con segno).
+
+     Non la media dei vertici: un lato spezzato in molti punti tirerebbe
+     l'icona verso quel lato invece che al centro dell'area. */
+  _centroid(points) {
+    if (!points || !points.length) return [0.5, 0.5];
+    if (points.length < 3) return points[0].slice();
+
+    let twiceArea = 0;
+    let cx = 0;
+    let cy = 0;
+    for (let i = 0; i < points.length; i++) {
+      const [x0, y0] = points[i];
+      const [x1, y1] = points[(i + 1) % points.length];
+      const cross = x0 * y1 - x1 * y0;
+      twiceArea += cross;
+      cx += (x0 + x1) * cross;
+      cy += (y0 + y1) * cross;
+    }
+    // poligono degenere (tutti i punti allineati): l'area è zero e la
+    // formula divide per zero, si ripiega sulla media
+    if (!twiceArea) {
+      const n = points.length;
+      return [
+        points.reduce((s, p) => s + p[0], 0) / n,
+        points.reduce((s, p) => s + p[1], 0) / n,
+      ];
+    }
+    return [cx / (3 * twiceArea), cy / (3 * twiceArea)];
+  }
+
+  _iconPos(area) {
+    if (area.icon_x != null && area.icon_y != null) {
+      return [Number(area.icon_x), Number(area.icon_y)];
+    }
+    return this._centroid(area.points || []);
+  }
+
+  _mapTab() {
+    return `<div class="map-tab">${this._mapTabInner()}</div>`;
+  }
+
+  _mapTabInner() {
+    const { map, areas } = this._mapData();
+    const edit = !!this._mapEdit;
+
+    if (!map.image_src) return this._mapEmpty();
+
+    return `
+      ${this._mapToolbar(areas)}
+      <ha-card class="map-card">
+        <div class="map-wrap${edit ? " editing" : ""}"
+             style="--fill-op:${Number(map.fill_opacity ?? 0.35)}">
+          <img class="map-img" src="${esc(map.image_src)}" alt="Planimetria" draggable="false">
+          <svg class="map-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+            ${this._mapSvgInner()}
+          </svg>
+          <div class="map-layer">${this._mapLayerInner()}</div>
+        </div>
+      </ha-card>
+      ${edit ? this._mapAreaList(areas) : this._mapLegend()}
+      <input type="file" class="map-file" accept="image/*" hidden>`;
+  }
+
+  _mapEmpty() {
+    return `
+      <ha-card><div class="inner">
+        <div class="card-head">
+          <ha-icon icon="mdi:map-outline"></ha-icon><h2>Mappa del giardino</h2>
+        </div>
+        <p class="muted small nomargin">
+          Carica una planimetria — una foto aerea, un disegno, uno screenshot
+          da una mappa — e disegnaci sopra le aree irrigate. Ogni area prende
+          il colore dal bilancio idrico della sua linea, e toccandone l'icona
+          si fa partire l'irrigazione.
+        </p>
+        <div class="tab-actions">
+          ${this._button("map-upload", "Carica immagine", { primary: true })}
+          ${this._button("map-url", "Usa un indirizzo")}
+        </div>
+      </div></ha-card>
+      <input type="file" class="map-file" accept="image/*" hidden>`;
+  }
+
+  _mapToolbar(areas) {
+    const edit = !!this._mapEdit;
+    const busy = !!(this._overview.running || {}).active;
+    const drawing = !!this._draft;
+    const selected = this._selArea ? this._areaById(this._selArea) : null;
+    const canRemoveVertex =
+      selected && this._selVertex != null && (selected.points || []).length > 3;
+
+    if (!edit) {
+      return `<div class="map-toolbar">
+        ${
+          busy
+            ? this._button("stop-all", "Ferma", { danger: true })
+            : this._button("run-all", "Irriga tutte le aree", { primary: true })
+        }
+        <span class="spacer"></span>
+        <span class="sub">${areas.length} ${areas.length === 1 ? "area" : "aree"}</span>
+        ${this._button("map-edit", "Modifica")}
+      </div>`;
+    }
+
+    if (drawing) {
+      return `<div class="map-toolbar">
+        <span class="sub">
+          Tocca l'immagine per posare i vertici · ${this._draft.length}
+          ${this._draft.length === 1 ? "punto" : "punti"}
+        </span>
+        <span class="spacer"></span>
+        ${this._button("draw-undo", "Annulla punto")}
+        ${this._button("draw-cancel", "Annulla")}
+        ${this._draft.length >= 3
+          ? this._button("draw-close", "Chiudi area", { primary: true })
+          : ""}
+      </div>`;
+    }
+
+    return `<div class="map-toolbar">
+      ${this._button("area-add", "Nuova area", { primary: true })}
+      ${selected ? this._button("area-edit", "Impostazioni") : ""}
+      ${canRemoveVertex ? this._button("vertex-del", "Elimina punto") : ""}
+      ${selected ? this._button("area-del", "Elimina area", { danger: true }) : ""}
+      <span class="spacer"></span>
+      ${this._button("map-image", "Immagine")}
+      ${this._button("map-done", "Fine")}
+    </div>`;
+  }
+
+  _mapSvgInner() {
+    const { areas } = this._mapData();
+    const toPts = (points) =>
+      points
+        .map((p) => `${(p[0] * 100).toFixed(3)},${(p[1] * 100).toFixed(3)}`)
+        .join(" ");
+
+    const shapes = areas
+      .filter((a) => (a.points || []).length >= 3)
+      .map((area) => {
+        const status = this._areaStatus(area);
+        const sel = this._mapEdit && this._selArea === area.id ? " selected" : "";
+        const stroke = area.color ? `--area-stroke:${esc(area.color)};` : "";
+        return `<polygon class="area s-${status.level}${sel}" data-area="${esc(area.id)}"
+                  points="${toPts(area.points)}" style="${stroke}"></polygon>`;
+      })
+      .join("");
+
+    // area in corso di disegno: linea aperta, così si vede che non è
+    // ancora chiusa
+    const draft = this._draft && this._draft.length
+      ? `<polyline class="draft" points="${toPts(this._draft)}"></polyline>`
+      : "";
+
+    return shapes + draft;
+  }
+
+  _mapLayerInner() {
+    const { areas } = this._mapData();
+    const edit = !!this._mapEdit;
+    const pct = (v) => `${(v * 100).toFixed(3)}%`;
+
+    const icons = areas
+      .filter((a) => a.show_icon !== false && (a.points || []).length >= 3)
+      .map((area) => {
+        const [x, y] = this._iconPos(area);
+        const status = this._areaStatus(area);
+        const zone = this._areaZone(area);
+        const color = area.icon_color ? `--icon-color:${esc(area.icon_color)};` : "";
+        const live = area.icon_entity ? this._liveState(area.icon_entity) : null;
+        // marcata con data-entity: si aggiorna a ogni cambio di stato,
+        // senza aspettare il giro di ricarica della pagina
+        const readout =
+          live && !live.missing
+            ? `<span class="map-read" data-entity="${esc(area.icon_entity)}">${esc(
+                live.value
+              )}${live.unit ? ` ${esc(live.unit)}` : ""}</span>`
+            : "";
+        const name = area.show_label === false ? "" :
+          `<span class="map-name">${esc(area.name || (zone && zone.name) || "")}</span>`;
+
+        return `<button type="button" class="map-icon s-${status.level}"
+                  data-icon-area="${esc(area.id)}" style="left:${pct(x)};top:${pct(y)};${color}"
+                  title="${esc(area.name || "")} — ${esc(status.label)}">
+                  <ha-icon icon="${esc(this._areaIcon(area))}"></ha-icon>
+                  ${name}${readout}
+                </button>`;
+      })
+      .join("");
+
+    if (!edit) return icons;
+
+    // maniglie: solo per l'area selezionata, altrimenti la mappa diventa
+    // un puntaspilli e non si distingue più cosa si sta modificando
+    const area = this._selArea ? this._areaById(this._selArea) : null;
+    const points = (area && area.points) || [];
+    const handles = points
+      .map((p, i) => {
+        const sel = this._selVertex === i ? " on" : "";
+        const [nx, ny] = points[(i + 1) % points.length];
+        const mid = `<span class="map-mid" data-mid="${i}"
+            style="left:${pct((p[0] + nx) / 2)};top:${pct((p[1] + ny) / 2)}"
+            title="Aggiungi un punto"></span>`;
+        return `<span class="map-vertex${sel}" data-vertex="${i}"
+            style="left:${pct(p[0])};top:${pct(p[1])}"></span>${
+          points.length >= 3 ? mid : ""
+        }`;
+      })
+      .join("");
+
+    const draftHandles = (this._draft || [])
+      .map(
+        (p, i) => `<span class="map-vertex draft" data-draft="${i}"
+            style="left:${pct(p[0])};top:${pct(p[1])}"></span>`
+      )
+      .join("");
+
+    return icons + handles + draftHandles;
+  }
+
+  _mapAreaList(areas) {
+    if (!areas.length) {
+      return `<ha-card><div class="inner"><div class="empty-state">
+        <ha-icon icon="mdi:vector-polygon"></ha-icon>
+        <p>Nessuna area disegnata. Tocca <b>Nuova area</b> e posa i vertici
+           sull'immagine.</p>
+      </div></div></ha-card>`;
+    }
+
+    const rows = areas
+      .map((area) => {
+        const zone = this._areaZone(area);
+        const status = this._areaStatus(area);
+        const sel = this._selArea === area.id ? " selected" : "";
+        return `<div class="row area-row${sel}" data-area-row="${esc(area.id)}">
+          <ha-icon icon="${esc(this._areaIcon(area))}"></ha-icon>
+          <div class="row-main">
+            <span class="row-label">${esc(area.name || "Area")}</span>
+            <span class="sub">${
+              zone ? esc(zone.name) : "nessuna linea collegata"
+            } · ${(area.points || []).length} punti</span>
+          </div>
+          <span class="badge st-${status.level}">${esc(status.label)}</span>
+          <ha-icon-button class="area-settings" data-id="${esc(area.id)}" label="Impostazioni">
+            <ha-icon icon="mdi:pencil"></ha-icon>
+          </ha-icon-button>
+          <ha-icon-button class="area-remove" data-id="${esc(area.id)}" label="Elimina">
+            <ha-icon icon="mdi:delete"></ha-icon>
+          </ha-icon-button>
+        </div>`;
+      })
+      .join("");
+
+    return `<ha-card><div class="inner">
+      <div class="card-head">
+        <ha-icon icon="mdi:vector-polygon"></ha-icon><h2>Aree</h2>
+      </div>
+      <p class="muted small nomargin">
+        Tocca un'area sull'immagine per selezionarla: compaiono le maniglie
+        dei vertici, i punti a metà lato ne aggiungono di nuovi, e
+        trascinando l'interno si sposta tutta l'area.
+      </p>
+      ${rows}
+    </div></ha-card>`;
+  }
+
+  _mapLegend() {
+    const voci = [
+      ["ok", "a posto"],
+      ["thirsty", "chiede acqua"],
+      ["critical", "carenza forte"],
+      ["watering", "in irrigazione"],
+    ];
+    return `<ha-card><div class="inner">
+      <div class="map-legend">
+        ${voci
+          .map(
+            ([level, testo]) =>
+              `<span class="legend-item"><i class="swatch s-${level}"></i>${testo}</span>`
+          )
+          .join("")}
+      </div>
+    </div></ha-card>`;
+  }
+
+  // ------------------------------------------------------ mappa: comandi
+
+  _repaintMap() {
+    const tab = this.shadowRoot.querySelector(".map-tab");
+    if (!tab) {
+      this._render();
+      return;
+    }
+    tab.innerHTML = this._mapTabInner();
+    this._bindMap();
+  }
+
+  /* Ridisegna i soli poligoni e maniglie.
+
+     Durante un trascinamento si passa di qui e non da `_repaintMap`:
+     rifare a ogni movimento del dito anche barra e lista costa, e
+     soprattutto sostituirebbe l'elemento su cui il browser sta seguendo
+     il puntatore. */
+  _repaintMapLayers() {
+    const tab = this.shadowRoot.querySelector(".map-tab");
+    const svg = tab && tab.querySelector(".map-svg");
+    const layer = tab && tab.querySelector(".map-layer");
+    if (!svg || !layer) {
+      this._repaintMap();
+      return;
+    }
+    svg.innerHTML = this._mapSvgInner();
+    layer.innerHTML = this._mapLayerInner();
+  }
+
+  /* Posizione del puntatore in coordinate 0..1 sull'immagine.
+
+     Il riquadro si misura **una volta sola**, all'inizio del
+     trascinamento: durante il gesto la pagina viene ridisegnata, e
+     misurare un elemento appena staccato dal documento darebbe zero. */
+  _pointIn(ev, box) {
+    const clamp = (v) => Math.min(1, Math.max(0, v));
+    return [
+      clamp((ev.clientX - box.left) / (box.width || 1)),
+      clamp((ev.clientY - box.top) / (box.height || 1)),
+    ];
+  }
+
+  _bindMap() {
+    const tab = this.shadowRoot.querySelector(".map-tab");
+    if (!tab) return;
+
+    const on = (sel, fn) =>
+      tab.querySelectorAll(sel).forEach((el) => el.addEventListener("click", fn));
+
+    on(".map-upload, .map-image", () => tab.querySelector(".map-file").click());
+    on(".map-url", () => this._openMapImageDialog());
+    on(".map-edit", () => {
+      this._mapEdit = true;
+      this._repaintMap();
+    });
+    on(".map-done", () => {
+      this._mapEdit = false;
+      this._selArea = null;
+      this._selVertex = null;
+      this._draft = null;
+      this._repaintMap();
+    });
+    on(".area-add", () => {
+      this._draft = [];
+      this._selArea = null;
+      this._selVertex = null;
+      this._repaintMap();
+    });
+    on(".draw-cancel", () => {
+      this._draft = null;
+      this._repaintMap();
+    });
+    on(".draw-undo", () => {
+      if (this._draft) this._draft.pop();
+      this._repaintMap();
+    });
+    on(".draw-close", () => this._closeDraft());
+    on(".area-edit", () => this._openAreaDialog(this._selArea));
+    on(".area-del", () => this._confirmDeleteArea(this._selArea));
+    on(".vertex-del", () => this._removeVertex());
+    // i due pulsanti stanno dentro la riga, che a sua volta seleziona:
+    // senza fermare la risalita si aprirebbe anche la selezione
+    on(".area-settings", (e) => {
+      e.stopPropagation();
+      this._openAreaDialog(e.currentTarget.getAttribute("data-id"));
+    });
+    on(".area-remove", (e) => {
+      e.stopPropagation();
+      this._confirmDeleteArea(e.currentTarget.getAttribute("data-id"));
+    });
+    on(".area-row", (e) => {
+      this._selArea = e.currentTarget.getAttribute("data-area-row");
+      this._selVertex = null;
+      this._repaintMap();
+    });
+    on(".run-all", () => this._mutate("POST", "run", {}));
+    on(".stop-all", () => this._mutate("POST", "stop", {}));
+
+    const file = tab.querySelector(".map-file");
+    if (file) {
+      file.addEventListener("change", (e) => {
+        const chosen = e.target.files && e.target.files[0];
+        e.target.value = "";
+        this._uploadImage(chosen);
+      });
+    }
+
+    const wrap = tab.querySelector(".map-wrap");
+    if (!wrap) return;
+    wrap.addEventListener("pointerdown", (e) => this._mapPointerDown(e, wrap));
+    wrap.addEventListener("dragstart", (e) => e.preventDefault());
+  }
+
+  _mapPointerDown(ev, wrap) {
+    const path = ev.composedPath ? ev.composedPath() : [ev.target];
+    const hit = (attr) => path.find((n) => n.getAttribute && n.getAttribute(attr) != null);
+    // misurato adesso, prima di qualunque ridisegno
+    const box = wrap.getBoundingClientRect();
+
+    // disegno in corso: ogni tocco posa un vertice
+    if (this._draft) {
+      ev.preventDefault();
+      this._draft.push(this._pointIn(ev, box));
+      this._repaintMap();
+      return;
+    }
+
+    const iconNode = hit("data-icon-area");
+    const polyHit = hit("data-area");
+
+    if (!this._mapEdit) {
+      // In visualizzazione la mappa è un pannello di comando, non un
+      // editor: vale sia l'icona sia l'area sotto, perché su un telefono
+      // centrare l'icona è più difficile che toccare il prato.
+      const tapped = iconNode || polyHit;
+      if (tapped) {
+        this._areaTapped(
+          tapped.getAttribute("data-icon-area") || tapped.getAttribute("data-area")
+        );
+      }
+      return;
+    }
+
+    const vertexNode = hit("data-vertex");
+    const midNode = hit("data-mid");
+    const polyNode = polyHit;
+
+    if (midNode) {
+      const area = this._areaById(this._selArea);
+      const index = Number(midNode.getAttribute("data-mid"));
+      if (!area) return;
+      const next = (index + 1) % area.points.length;
+      const middle = [
+        (area.points[index][0] + area.points[next][0]) / 2,
+        (area.points[index][1] + area.points[next][1]) / 2,
+      ];
+      area.points.splice(index + 1, 0, middle);
+      this._selVertex = index + 1;
+      this._repaintMap();
+      this._saveArea(area);
+      return;
+    }
+
+    if (vertexNode) {
+      const area = this._areaById(this._selArea);
+      if (!area) return;
+      const index = Number(vertexNode.getAttribute("data-vertex"));
+      this._selVertex = index;
+      this._repaintMap();
+      this._dragOn(ev, box, area, (point) => {
+        area.points[index] = point;
+      });
+      return;
+    }
+
+    if (iconNode) {
+      const area = this._areaById(iconNode.getAttribute("data-icon-area"));
+      if (!area) return;
+      this._selArea = area.id;
+      this._selVertex = null;
+      this._repaintMap();
+      // l'icona si stacca dal baricentro solo se la si sposta davvero
+      this._dragOn(ev, box, area, (point) => {
+        area.icon_x = point[0];
+        area.icon_y = point[1];
+      });
+      return;
+    }
+
+    if (polyNode) {
+      const area = this._areaById(polyNode.getAttribute("data-area"));
+      if (!area) return;
+      const first = this._selArea !== area.id;
+      this._selArea = area.id;
+      this._selVertex = null;
+      this._repaintMap();
+      // il primo tocco seleziona e basta: trascinare per sbaglio un'area
+      // appena scelta è il modo più facile per rovinare un disegno
+      if (first) return;
+
+      const start = this._pointIn(ev, box);
+      const origin = area.points.map((p) => p.slice());
+      this._dragOn(ev, box, area, (point) => {
+        const dx = point[0] - start[0];
+        const dy = point[1] - start[1];
+        area.points = origin.map(([x, y]) => [
+          Math.min(1, Math.max(0, x + dx)),
+          Math.min(1, Math.max(0, y + dy)),
+        ]);
+      });
+      return;
+    }
+
+    // fuori da tutto: si deseleziona
+    if (this._selArea) {
+      this._selArea = null;
+      this._selVertex = null;
+      this._repaintMap();
+    }
+  }
+
+  /* Trascinamento: si ridisegna a ogni movimento, si salva solo alla
+     fine. Una chiamata al server per ogni pixel percorso intaserebbe la
+     rete e la scheda SD del Raspberry. */
+  _dragOn(ev, box, area, onMove) {
+    ev.preventDefault();
+    this._mapDragging = true;
+    let moved = false;
+
+    const move = (e) => {
+      moved = true;
+      onMove(this._pointIn(e, box));
+      this._repaintMapLayers();
+    };
+    const end = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      this._mapDragging = false;
+      if (moved) this._saveArea(area);
+    };
+
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+  }
+
+  async _saveArea(area) {
+    try {
+      await this._api("POST", `areas/${area.id}`, {
+        points: area.points,
+        icon_x: area.icon_x ?? null,
+        icon_y: area.icon_y ?? null,
+      });
+      this._error = null;
+    } catch (err) {
+      this._error = (err && err.message) || String(err);
+      this._render();
+    }
+  }
+
+  async _closeDraft() {
+    const points = this._draft || [];
+    if (points.length < 3) return;
+    this._draft = null;
+
+    const numero = this._mapData().areas.length + 1;
+    try {
+      const res = await this._api("POST", "areas", {
+        name: `Area ${numero}`,
+        points,
+      });
+      if (res && res.overview) this._overview = res.overview;
+      this._selArea = res && res.area ? res.area.id : null;
+      this._repaintMap();
+      // il disegno è la parte difficile: appena chiuso si chiede subito a
+      // cosa serve, invece di lasciare in giro un poligono senza nome
+      if (this._selArea) this._openAreaDialog(this._selArea);
+    } catch (err) {
+      this._error = (err && err.message) || String(err);
+      this._render();
+    }
+  }
+
+  _removeVertex() {
+    const area = this._areaById(this._selArea);
+    if (!area || this._selVertex == null) return;
+    if ((area.points || []).length <= 3) return; // sotto i tre non è più un'area
+    area.points.splice(this._selVertex, 1);
+    this._selVertex = null;
+    this._repaintMap();
+    this._saveArea(area);
+  }
+
+  /* Tocco su un'icona in visualizzazione: è la scorciatoia per irrigare.
+     Senza linea collegata si apre l'entità, che è l'unica cosa sensata
+     che si possa fare. */
+  _areaTapped(areaId) {
+    const area = this._areaById(areaId);
+    if (!area) return;
+    const zone = this._areaZone(area);
+
+    if (zone) {
+      if (!zone.enabled) {
+        this._error = `${zone.name} è disattivata: riattivala per irrigarla.`;
+        this._render();
+        return;
+      }
+      this._openForceDialog(zone.id);
+      return;
+    }
+    if (area.icon_entity) {
+      this.dispatchEvent(
+        new CustomEvent("hass-more-info", {
+          detail: { entityId: area.icon_entity },
+          bubbles: true,
+          composed: true,
+        })
+      );
+    }
+  }
+
+  /* Il caricamento non passa da `callApi`: quello serializza in JSON, e
+     qui va spedito il file così com'è. */
+  async _uploadImage(file) {
+    if (!file) return;
+    try {
+      const body = new FormData();
+      body.append("file", file);
+      const url = "/api/irrigazione_smart/map/image";
+      const resp = this._hass.fetchWithAuth
+        ? await this._hass.fetchWithAuth(url, { method: "POST", body })
+        : await fetch(url, {
+            method: "POST",
+            body,
+            headers: { authorization: `Bearer ${this._hass.auth.data.access_token}` },
+          });
+
+      if (!resp.ok) {
+        const detail = await resp.json().catch(() => null);
+        throw new Error(
+          (detail && detail.message) || `Caricamento non riuscito (${resp.status})`
+        );
+      }
+
+      const data = await resp.json();
+      if (data && data.overview) this._overview = data.overview;
+      this._error = null;
+      this._render();
+    } catch (err) {
+      this._error = (err && err.message) || String(err);
+      this._render();
+    }
+  }
+
+  _openMapImageDialog() {
+    const { map } = this._mapData();
+    this._showForm(
+      "Immagine della mappa",
+      [
+        {
+          key: "image_url",
+          label: "Indirizzo dell'immagine",
+          helper: "Per esempio /local/giardino.png, cioè config/www/giardino.png",
+        },
+        {
+          key: "fill_opacity",
+          label: "Trasparenza delle aree",
+          type: "number",
+          min: 0,
+          max: 1,
+          step: 0.05,
+          helper: "0 = solo il contorno, 1 = riempimento pieno",
+        },
+      ],
+      { image_url: map.image_url || "", fill_opacity: map.fill_opacity ?? 0.35 },
+      async (values) => {
+        await this._mutate("POST", "map", {
+          image_url: values.image_url || null,
+          ...(values.image_url ? { image_id: null } : {}),
+          fill_opacity: Number(values.fill_opacity ?? 0.35),
+        });
+      }
+    );
+  }
+
+  _openAreaDialog(areaId) {
+    const area = this._areaById(areaId);
+    if (!area) return;
+
+    const zones = this._overview.zones || [];
+    const zoneLabels = { "": "Nessuna" };
+    zones.forEach((z) => {
+      zoneLabels[z.id] = z.name;
+    });
+
+    this._showForm(
+      "Area della mappa",
+      [
+        { key: "name", label: "Nome" },
+        {
+          key: "zone_id",
+          label: "Linea collegata",
+          type: "select",
+          options: ["", ...zones.map((z) => z.id)],
+          labels: zoneLabels,
+          helper: "Da qui arrivano il colore del riempimento e l'irrigazione al tocco",
+        },
+        { type: "section", label: "Aspetto" },
+        {
+          key: "color",
+          label: "Colore del bordo",
+          type: "color",
+          helper: "Il riempimento non si sceglie: lo decide il bilancio idrico",
+        },
+        { key: "icon", label: "Icona", type: "icon",
+          helper: "Vuota = quella della linea collegata" },
+        { key: "icon_color", label: "Colore dell'icona", type: "color" },
+        { key: "show_icon", label: "Mostra l'icona", type: "boolean" },
+        { key: "show_label", label: "Mostra il nome", type: "boolean" },
+        {
+          key: "icon_entity",
+          label: "Entità mostrata dall'icona",
+          type: "entity",
+          domains: ["sensor", "binary_sensor", "switch", "valve", "number"],
+          helper: "Il suo valore compare sotto l'icona. Facoltativa",
+        },
+      ],
+      {
+        name: area.name || "",
+        zone_id: area.zone_id || "",
+        color: area.color || null,
+        icon: area.icon || undefined,
+        icon_color: area.icon_color || null,
+        show_icon: area.show_icon !== false,
+        show_label: area.show_label !== false,
+        icon_entity: area.icon_entity || undefined,
+      },
+      async (values) => {
+        await this._mutate("POST", `areas/${areaId}`, {
+          ...values,
+          zone_id: values.zone_id || null,
+          icon: values.icon || null,
+          icon_entity: values.icon_entity || null,
+        });
+        this._repaintMap();
+      }
+    );
+  }
+
+  _confirmDeleteArea(areaId) {
+    const area = this._areaById(areaId);
+    if (!area) return;
+
+    const dlg = this._makeDialog("Eliminare l'area?");
+    const body = document.createElement("p");
+    body.className = "muted small";
+    body.textContent = `"${area.name || "Area"}" verrà rimossa dalla mappa. La linea collegata resta.`;
+    dlg.appendChild(body);
+
+    const close = () => dlg.remove();
+    dlg.appendChild(
+      this._actionBar("Elimina", async () => {
+        close();
+        if (this._selArea === areaId) this._selArea = null;
+        await this._mutate("DELETE", `areas/${areaId}`);
+      }, close, true)
+    );
+
+    this.shadowRoot.appendChild(dlg);
+    this._layoutFallback(dlg);
+  }
+
   _meteoTab() {
     return `${this._et0Card()}
       ${this._forecastCard()}
@@ -2391,9 +3220,61 @@ class IrrigazioneSmartPanel extends HTMLElement {
     return row;
   }
 
+  /* Colore, con la possibilità di non sceglierne uno.
+
+     `input type=color` non sa dire "nessun colore", ma qui serve: senza
+     scelta l'area prende la tinta del suo stato, che è quasi sempre la
+     cosa giusta. La casella "automatico" è quel valore mancante. */
+  _colorField(spec, values) {
+    const row = document.createElement("div");
+    row.className = "ha-field";
+
+    const lab = document.createElement("label");
+    lab.className = "ha-field-label";
+    lab.textContent = spec.label;
+
+    const box = document.createElement("div");
+    box.className = "ha-field-box color-box";
+
+    const input = document.createElement("input");
+    input.type = "color";
+    input.className = "color-input";
+    input.value = values[spec.key] || spec.fallback || "#03a9f4";
+
+    const auto = document.createElement("label");
+    auto.className = "color-auto";
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    check.checked = !values[spec.key];
+    auto.append(check, document.createTextNode("automatico"));
+
+    const sync = () => {
+      values[spec.key] = check.checked ? null : input.value;
+      input.disabled = check.checked;
+    };
+    input.addEventListener("input", () => {
+      check.checked = false;
+      sync();
+    });
+    check.addEventListener("change", sync);
+    sync();
+
+    box.append(input, auto);
+    row.append(lab, box);
+
+    if (spec.helper) {
+      const help = document.createElement("span");
+      help.className = "fld-helper";
+      help.textContent = spec.helper;
+      row.appendChild(help);
+    }
+    return row;
+  }
+
   _makeField(spec, values) {
     // Le tendine restano native: è l'unico modo per cui funzionino sempre.
     if (spec.type === "select") return this._styledSelect(spec, values);
+    if (spec.type === "color") return this._colorField(spec, values);
     return has("ha-selector")
       ? this._haField(spec, values)
       : this._plainField(spec, values);
@@ -2898,6 +3779,109 @@ class IrrigazioneSmartPanel extends HTMLElement {
                          animation: pulse 1.6s ease-in-out infinite; }
 
       .zone-icon { color: var(--state-icon-color, var(--secondary-text-color)); }
+
+      /* -------------------------------------------------------------- mappa
+
+         Il riquadro segue esattamente l'immagine: l'immagine occupa tutta
+         la larghezza e detta l'altezza, SVG e maniglie si sovrappongono al
+         100%. Così le coordinate normalizzate combaciano senza calcoli, e
+         il disegno viene deformato esattamente come l'immagine. */
+      .map-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+                     margin-bottom: 12px; }
+      .map-card { overflow: hidden; }
+      .map-wrap { position: relative; line-height: 0; touch-action: pan-y;
+                  user-select: none; -webkit-user-select: none; }
+      .map-wrap.editing { touch-action: none; cursor: crosshair; }
+      .map-img { display: block; width: 100%; height: auto; }
+      .map-svg, .map-layer { position: absolute; inset: 0; width: 100%; height: 100%; }
+      .map-svg { overflow: visible; }
+      /* le maniglie sono elementi veri: il livello lascia passare i clic */
+      .map-layer { pointer-events: none; }
+      .map-layer > * { pointer-events: auto; }
+
+      /* Il riempimento dice il bilancio idrico, il bordo dice quale area
+         è: a posto si vede solo il contorno, perché una planimetria tutta
+         colorata non la si legge più. */
+      .area { fill: var(--area-fill, transparent);
+              fill-opacity: var(--area-op, var(--fill-op, .35));
+              stroke: var(--area-stroke, var(--primary-color));
+              stroke-width: 2; stroke-linejoin: round;
+              vector-effect: non-scaling-stroke; cursor: pointer;
+              transition: fill-opacity .3s ease; }
+      .area.s-ok { --area-fill: var(--success-color, #43a047); --area-op: 0;
+                   --area-stroke: var(--success-color, #43a047); }
+      .area.s-thirsty { --area-fill: var(--warning-color, #ffa600);
+                        --area-stroke: var(--warning-color, #ffa600); }
+      .area.s-critical { --area-fill: var(--error-color, #db4437);
+                         --area-stroke: var(--error-color, #db4437); }
+      .area.s-watering { --area-fill: var(--info-color, var(--primary-color));
+                         --area-stroke: var(--info-color, var(--primary-color));
+                         animation: area-breathe 2.4s ease-in-out infinite; }
+      .area.s-off, .area.s-none { --area-fill: var(--disabled-text-color, #9e9e9e);
+                                  --area-op: .12;
+                                  --area-stroke: var(--disabled-text-color, #9e9e9e); }
+      .area.selected { stroke-width: 3; stroke-dasharray: 6 3; }
+      .draft { fill: none; stroke: var(--primary-color); stroke-width: 2;
+               stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; }
+
+      /* l'azzurro respira: è l'unico stato che sta cambiando mentre lo
+         guardi, e deve distinguersi da un'area semplicemente fredda */
+      @keyframes area-breathe {
+        0%, 100% { fill-opacity: calc(var(--fill-op, .35) * .45); }
+        50% { fill-opacity: calc(var(--fill-op, .35) * 1.35); }
+      }
+
+      .map-icon { position: absolute; transform: translate(-50%, -50%);
+                  display: flex; flex-direction: column; align-items: center; gap: 2px;
+                  background: none; border: 0; padding: 4px; cursor: pointer;
+                  font-family: inherit; color: var(--icon-color, #fff);
+                  text-shadow: 0 1px 3px rgba(0,0,0,.65); }
+      .map-icon ha-icon { --mdc-icon-size: 30px;
+                          filter: drop-shadow(0 1px 3px rgba(0,0,0,.6)); }
+      .map-icon.s-thirsty { --icon-color: var(--warning-color, #ffa600); }
+      .map-icon.s-critical { --icon-color: var(--error-color, #db4437); }
+      .map-icon.s-watering { --icon-color: var(--info-color, var(--primary-color)); }
+      .map-icon.s-off { --icon-color: var(--disabled-text-color, #bdbdbd); }
+      .map-name { font-size: 12px; font-weight: 600; white-space: nowrap; }
+      .map-read { font-size: 11px; opacity: .9; white-space: nowrap; }
+
+      .map-vertex { position: absolute; width: 16px; height: 16px; margin: -8px 0 0 -8px;
+                    border-radius: 50%; background: var(--card-background-color);
+                    border: 2px solid var(--primary-color); cursor: grab;
+                    box-shadow: 0 1px 4px rgba(0,0,0,.4); touch-action: none; }
+      .map-vertex.on { background: var(--primary-color); }
+      .map-vertex.draft { border-style: dashed; }
+      .map-mid { position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px;
+                 border-radius: 50%; background: var(--primary-color); opacity: .55;
+                 cursor: copy; touch-action: none; }
+      .map-mid:hover { opacity: 1; }
+
+      .area-row { cursor: pointer; border-radius: 8px; }
+      .area-row.selected { background: color-mix(in srgb, var(--primary-color) 12%, transparent); }
+      .map-legend { display: flex; gap: 16px; flex-wrap: wrap; }
+      .swatch { width: 14px; height: 14px; border-radius: 4px; display: inline-block;
+                border: 2px solid currentColor; }
+      .swatch.s-ok { color: var(--success-color, #43a047); background: transparent; }
+      .swatch.s-thirsty { color: var(--warning-color, #ffa600);
+                          background: color-mix(in srgb, var(--warning-color, #ffa600) 35%, transparent); }
+      .swatch.s-critical { color: var(--error-color, #db4437);
+                           background: color-mix(in srgb, var(--error-color, #db4437) 35%, transparent); }
+      .swatch.s-watering { color: var(--info-color, var(--primary-color));
+                           background: color-mix(in srgb, var(--info-color, var(--primary-color)) 35%, transparent); }
+
+      .badge.st-ok { background: color-mix(in srgb, var(--success-color, #43a047) 18%, transparent); color: var(--success-color, #43a047); }
+      .badge.st-thirsty { background: color-mix(in srgb, var(--warning-color, #ffa600) 22%, transparent); color: var(--warning-color, #ffa600); }
+      .badge.st-critical { background: color-mix(in srgb, var(--error-color, #db4437) 18%, transparent); color: var(--error-color, #db4437); }
+      .badge.st-watering { background: color-mix(in srgb, var(--info-color, var(--primary-color)) 18%, transparent); color: var(--info-color, var(--primary-color)); }
+      .badge.st-off, .badge.st-none { background: var(--divider-color); color: var(--secondary-text-color); }
+
+      .color-box { display: flex; align-items: center; gap: 12px; }
+      .color-input { width: 52px; height: 36px; padding: 0; border-radius: 8px;
+                     border: 1px solid var(--divider-color); background: none;
+                     cursor: pointer; }
+      .color-input:disabled { opacity: .4; cursor: default; }
+      .color-auto { display: inline-flex; align-items: center; gap: 6px;
+                    font-size: 13px; color: var(--secondary-text-color); cursor: pointer; }
 
       /* maniglia di trascinamento per riordinare le linee */
       .drag-handle { display: inline-flex; align-items: center; cursor: grab;

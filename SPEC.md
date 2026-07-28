@@ -504,6 +504,53 @@ rappresentato come **livello che scende**, non come percentuale astratta:
 Rispettare i token di tema HA (`--primary-color`, `--card-background-color`,
 ecc.) per non stonare col resto dell'interfaccia.
 
+### 8.1 Mappa del giardino
+
+Una planimetria — foto aerea, disegno, screenshot di una mappa — con le
+aree irrigate disegnate sopra. Serve a rispondere a colpo d'occhio a una
+domanda che le liste rendono faticosa: *dove* manca acqua.
+
+**Il riempimento non è configurabile.** Il colore lo decide `zoneStatus()`,
+lo stesso che colora la dashboard e le schede dei gruppi: trasparente se
+la linea sta bene, giallo se chiede acqua, rosso in carenza forte,
+azzurro pulsante mentre irriga. Configurabile è il *bordo*, che dice
+quale area è quale. Lasciar scegliere anche il riempimento avrebbe reso
+la mappa una decorazione invece che uno strumento diagnostico.
+
+**Coordinate normalizzate 0..1** sui lati dell'immagine, non pixel. La
+stessa mappa deve reggere il telefono e il desktop, e sostituire la
+planimetria con una a risoluzione diversa non deve buttare via il
+disegno. Il riquadro segue esattamente l'immagine (`width:100%`,
+`height:auto`) e l'SVG ci si sovrappone al 100% con
+`preserveAspectRatio="none"`: le coordinate combaciano senza calcoli di
+lettering, e il disegno si deforma esattamente come l'immagine.
+
+**L'immagine non passa da `image_upload`** di Home Assistant, che serve
+solo miniature quadrate di 256 o 512 pixel: una planimetria ritagliata a
+quadrato e ridotta a 512 non si legge più. Il file si salva per intero in
+`.storage/irrigazione_smart/` e si serve da `MapImageServeView`, senza
+autenticazione — un tag `img` non può portarsi dietro il token, ed è la
+stessa scelta che fa `image_upload`. Si serve **solo** la planimetria
+attualmente configurata, quindi non c'è modo di farsi restituire un file
+arbitrario con un percorso costruito ad arte.
+
+| Gesto | In visualizzazione | In modifica |
+|---|---|---|
+| Tocco su un'area o sulla sua icona | Irriga quella linea | Seleziona |
+| Tocco su un'area già selezionata | — | Trascina tutta l'area |
+| Tocco su una maniglia | — | Sposta il vertice |
+| Tocco su un punto a metà lato | — | Aggiunge un vertice |
+
+Il primo tocco su un'area seleziona e basta: trascinare per sbaglio
+un'area appena scelta è il modo più facile di rovinare un disegno.
+
+I salvataggi avvengono a **trascinamento finito**, non a ogni movimento:
+una chiamata al server per ogni pixel percorso intaserebbe la rete e la
+scheda SD. Durante il gesto si ridisegnano i soli poligoni e maniglie
+(`_repaintMapLayers`), e il riquadro si misura una volta sola all'inizio
+— misurarlo dopo un ridisegno significherebbe misurare un elemento
+appena staccato dal documento, che risponde zero.
+
 ---
 
 ## 9. API WebSocket
