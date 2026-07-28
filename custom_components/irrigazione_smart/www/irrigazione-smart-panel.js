@@ -21,6 +21,16 @@ const SENSORS = [
 
 /* Le schede fisse. Prato, Aiuole e Orto si aggiungono in mezzo, perché
    sono impianti diversi con orari propri e vanno tenuti separati. */
+/* Versione di questo file, tenuta allineata da `scripts/bump.py`.
+
+   Serve a riconoscere il disallineamento più insidioso di questo
+   progetto: HACS sostituisce i file su disco, il browser rilegge subito
+   il JavaScript nuovo, ma il Python resta quello già caricato in memoria
+   finché Home Assistant non riparte. La pagina sa quindi di funzioni che
+   il server non ha ancora, e le chiamate rispondono 404 senza che si
+   capisca perché. */
+const PANEL_VERSION = "1.0.0";
+
 const BASE_TABS = [
   { id: "dashboard", label: "Dashboard", icon: "mdi:view-dashboard-outline" },
   { id: "mappa", label: "Mappa", icon: "mdi:map-outline" },
@@ -732,6 +742,26 @@ class IrrigazioneSmartPanel extends HTMLElement {
     });
   }
 
+  /* Avviso quando la pagina è più nuova dell'integration in esecuzione.
+
+     Aggiornando da HACS i file cambiano su disco e il browser rilegge
+     subito questo JavaScript, ma il Python continua a essere quello già
+     caricato: ricaricare l'integration non basta, perché il modulo è in
+     memoria e non viene riletto. Finché non si riavvia Home Assistant la
+     pagina chiede funzioni che il server non ha, e la risposta è un 404
+     che non spiega niente. Meglio dirlo prima che succeda. */
+  _staleBackend() {
+    const running = this._overview && this._overview.version;
+    if (!running || running === PANEL_VERSION || running === "?") return "";
+
+    return `<ha-alert alert-type="warning" title="Riavvia Home Assistant">
+      Questa pagina è la ${esc(PANEL_VERSION)}, ma l'integration in esecuzione
+      è ancora la ${esc(running)}: l'aggiornamento è arrivato su disco e non
+      in memoria. Finché non riavvii, le funzioni nuove rispondono
+      «non trovato».
+    </ha-alert>`;
+  }
+
   _body() {
     if (this._loading && !this._overview) {
       return `<div class="empty">Caricamento…</div>`;
@@ -747,9 +777,9 @@ class IrrigazioneSmartPanel extends HTMLElement {
       </ha-alert>`;
     }
 
-    const err = this._error
-      ? `<ha-alert alert-type="error">${esc(this._error)}</ha-alert>`
-      : "";
+    const err =
+      this._staleBackend() +
+      (this._error ? `<ha-alert alert-type="error">${esc(this._error)}</ha-alert>` : "");
 
     if (this._tab.startsWith("g:")) return err + this._groupTab(this._tab.slice(2));
     if (this._tab === "mappa") return err + this._mapTab();
@@ -1908,6 +1938,18 @@ class IrrigazioneSmartPanel extends HTMLElement {
     return zoneStatus(zone, (this._overview.running || {}).zone_id || null);
   }
 
+  /* Nome dell'area: il suo, se gliene è stato dato uno, altrimenti
+     quello della linea collegata.
+
+     Chiamare "Area 3" il pezzo di prato che si chiama "Prato Sud"
+     costringe a ribattere lo stesso nome due volte e a tenerlo allineato
+     a mano. Stesso criterio dell'icona, che pure eredita dalla linea. */
+  _areaName(area) {
+    if (area && area.name) return area.name;
+    const zone = this._areaZone(area);
+    return (zone && zone.name) || "Area senza nome";
+  }
+
   _areaIcon(area) {
     if (area.icon) return area.icon;
     const zone = this._areaZone(area);
@@ -2083,7 +2125,6 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .map((area) => {
         const [x, y] = this._iconPos(area);
         const status = this._areaStatus(area);
-        const zone = this._areaZone(area);
         const color = area.icon_color ? `--icon-color:${esc(area.icon_color)};` : "";
         const live = area.icon_entity ? this._liveState(area.icon_entity) : null;
         // marcata con data-entity: si aggiorna a ogni cambio di stato,
@@ -2095,11 +2136,11 @@ class IrrigazioneSmartPanel extends HTMLElement {
               )}${live.unit ? ` ${esc(live.unit)}` : ""}</span>`
             : "";
         const name = area.show_label === false ? "" :
-          `<span class="map-name">${esc(area.name || (zone && zone.name) || "")}</span>`;
+          `<span class="map-name">${esc(this._areaName(area))}</span>`;
 
         return `<button type="button" class="map-icon s-${status.level}"
                   data-icon-area="${esc(area.id)}" style="left:${pct(x)};top:${pct(y)};${color}"
-                  title="${esc(area.name || "")} — ${esc(status.label)}">
+                  title="${esc(this._areaName(area))} — ${esc(status.label)}">
                   <ha-icon icon="${esc(this._areaIcon(area))}"></ha-icon>
                   ${name}${readout}
                 </button>`;
@@ -2153,7 +2194,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
         return `<div class="row area-row${sel}" data-area-row="${esc(area.id)}">
           <ha-icon icon="${esc(this._areaIcon(area))}"></ha-icon>
           <div class="row-main">
-            <span class="row-label">${esc(area.name || "Area")}</span>
+            <span class="row-label">${esc(this._areaName(area))}</span>
             <span class="sub">${
               zone ? esc(zone.name) : "nessuna linea collegata"
             } · ${(area.points || []).length} punti</span>
@@ -2468,12 +2509,10 @@ class IrrigazioneSmartPanel extends HTMLElement {
     if (points.length < 3) return;
     this._draft = null;
 
-    const numero = this._mapData().areas.length + 1;
     try {
-      const res = await this._api("POST", "areas", {
-        name: `Area ${numero}`,
-        points,
-      });
+      // senza nome: lo prenderà dalla linea che si sta per collegare, che
+      // è il passo subito successivo
+      const res = await this._api("POST", "areas", { name: "", points });
       if (res && res.overview) this._overview = res.overview;
       this._selArea = res && res.area ? res.area.id : null;
       this._repaintMap();
@@ -2601,14 +2640,19 @@ class IrrigazioneSmartPanel extends HTMLElement {
     this._showForm(
       "Area della mappa",
       [
-        { key: "name", label: "Nome" },
         {
           key: "zone_id",
           label: "Linea collegata",
           type: "select",
           options: ["", ...zones.map((z) => z.id)],
           labels: zoneLabels,
-          helper: "Da qui arrivano il colore del riempimento e l'irrigazione al tocco",
+          helper:
+            "Da qui arrivano nome, icona, colore del riempimento e l'irrigazione al tocco",
+        },
+        {
+          key: "name",
+          label: "Nome",
+          helper: "Vuoto = quello della linea collegata",
         },
         { type: "section", label: "Aspetto" },
         {
@@ -2659,7 +2703,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
     const dlg = this._makeDialog("Eliminare l'area?");
     const body = document.createElement("p");
     body.className = "muted small";
-    body.textContent = `"${area.name || "Area"}" verrà rimossa dalla mappa. La linea collegata resta.`;
+    body.textContent = `"${this._areaName(area)}" verrà rimossa dalla mappa. La linea collegata resta.`;
     dlg.appendChild(body);
 
     const close = () => dlg.remove();

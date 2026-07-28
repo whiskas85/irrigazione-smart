@@ -27,10 +27,13 @@ from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-MANIFEST = ROOT / "custom_components" / "irrigazione_smart" / "manifest.json"
+COMPONENT = ROOT / "custom_components" / "irrigazione_smart"
+MANIFEST = COMPONENT / "manifest.json"
+PANEL_JS = COMPONENT / "www" / "irrigazione-smart-panel.js"
 CHANGELOG = ROOT / "CHANGELOG.md"
 
 SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+PANEL_VERSION_RE = re.compile(r'^const PANEL_VERSION = "[^"]*";$', re.MULTILINE)
 
 
 def read_version() -> str:
@@ -62,6 +65,23 @@ def write_manifest(version: str) -> None:
     MANIFEST.write_text(
         json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
+
+
+def write_panel_version(version: str) -> None:
+    """Allinea la versione dichiarata dal pannello.
+
+    Il pannello la confronta con quella dell'integration in esecuzione
+    per accorgersi che i file sono stati aggiornati ma Home Assistant non
+    è ancora ripartito. Se le due versioni si disallineano per una
+    dimenticanza, l'avviso comparirebbe sempre e diventerebbe rumore.
+    """
+    source = PANEL_JS.read_text(encoding="utf-8")
+    updated, count = PANEL_VERSION_RE.subn(
+        f'const PANEL_VERSION = "{version}";', source, count=1
+    )
+    if not count:
+        sys.exit(f"PANEL_VERSION non trovata in {PANEL_JS.name}")
+    PANEL_JS.write_text(updated, encoding="utf-8")
 
 
 def update_changelog(version: str) -> bool:
@@ -154,6 +174,8 @@ def main() -> None:
 
     write_manifest(target)
     print("  manifest.json aggiornato")
+    write_panel_version(target)
+    print("  pannello allineato")
     if had_entries:
         print("  CHANGELOG.md aggiornato")
 
@@ -161,7 +183,7 @@ def main() -> None:
         print("\n  Commit e tag saltati (--no-tag)")
         return
 
-    git("add", str(MANIFEST), str(CHANGELOG))
+    git("add", str(MANIFEST), str(PANEL_JS), str(CHANGELOG))
     git("commit", "-m", f"release: v{target}")
     git("tag", "-a", f"v{target}", "-m", f"v{target}")
 

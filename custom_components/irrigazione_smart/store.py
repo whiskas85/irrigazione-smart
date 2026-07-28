@@ -193,7 +193,9 @@ DEFAULT_MAP: dict[str, Any] = {
 # del telefono e quello del desktop, e una planimetria sostituita con una
 # a risoluzione diversa non deve buttare via il disegno.
 AREA_FIELDS: dict[str, Any] = {
-    "name": "Nuova area",
+    # Vuoto di proposito: senza un nome proprio l'area prende quello
+    # della linea collegata, che è quasi sempre come la si chiama davvero.
+    "name": "",
     # linea irrigata da quest'area: da qui arrivano stato e comando
     "zone_id": None,
     "points": [],

@@ -8,6 +8,27 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Aggiunto
+- **Il pannello si accorge se manca il riavvio.** Aggiornando da HACS i
+  file cambiano su disco e il browser rilegge subito il JavaScript nuovo,
+  ma il Python resta quello già caricato in memoria: ricaricare
+  l'integration non basta, perché il modulo non viene riletto. La pagina
+  chiedeva quindi funzioni che il server non aveva ancora, e la risposta
+  era un «non trovato» che non spiegava niente — è successo con il
+  caricamento dell'immagine della mappa. Ora la pagina confronta la
+  propria versione con quella dell'integration in esecuzione e, se
+  differiscono, lo scrive in cima: *riavvia Home Assistant*
+- `scripts/bump.py` allinea da sé la versione dichiarata dal pannello,
+  così le due non possono divergere per una dimenticanza
+
+### Modificato
+- **L'area della mappa prende il nome dalla linea collegata.** Le aree
+  nuove non si chiamano più "Area 3": senza un nome proprio mostrano
+  quello della linea, come già fanno con l'icona. Chiamare "Area 3" il
+  pezzo di prato che si chiama "Prato Sud" costringeva a ribattere lo
+  stesso nome e a tenerlo allineato a mano. Un nome scritto a mano
+  continua ad avere la precedenza
+
 ## [1.0.0] - 2026-07-28
 
 ### Aggiunto
