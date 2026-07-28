@@ -8,6 +8,19 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Corretto
+- **L'avvio automatico si bloccava per il resto della giornata.** Il gruppo
+  veniva marcato come "già eseguito oggi" *prima* di sapere se
+  l'irrigazione partiva davvero: se all'orario di inizio nessuna linea era
+  sotto soglia, il marcatore restava e ogni tentativo successivo veniva
+  saltato. Chi poi forzava un deficit, o spostava la finestra più avanti,
+  non vedeva partire più nulla fino al giorno dopo. Ora il marcatore si
+  scrive solo quando l'irrigazione parte davvero
+- **La dashboard mostrava gli orari sbagliati**: calcolava il programma
+  sull'unica finestra di sistema (04:00–08:00) invece che sulla finestra di
+  ciascun gruppo, così le aiuole comparivano alle 04:00 anche con la loro
+  finestra impostata alle 13:45. Ora ogni gruppo compare con i propri orari
+
 ## [0.9.0] - 2026-07-28
 
 ### Aggiunto

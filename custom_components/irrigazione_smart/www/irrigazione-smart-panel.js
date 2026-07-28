@@ -1635,60 +1635,74 @@ class IrrigazioneSmartPanel extends HTMLElement {
     return ` · ultima ${when}${forced}`;
   }
 
-  _sequenceCard(sched, sys) {
-    const runs = sched.runs || [];
-    const body = runs.length
-      ? runs.map((r) => `<div class="row">
-            <ha-icon icon="mdi:clock-outline"></ha-icon>
-            <div class="row-main">
-              <span class="row-label">${esc(r.zone_name)}</span>
-              <span class="sub">${r.cycles > 1 ? r.cycles + " cicli" : "ciclo unico"}</span>
-            </div>
-            <span class="reading small">${esc(r.start)}–${esc(r.end)}</span>
-            <span class="badge run">${r.minutes} min</span>
-          </div>`).join("")
-      : `<div class="empty-state">
-           <ha-icon icon="mdi:water-check"></ha-icon>
-           <p>Nessuna irrigazione necessaria adesso.</p>
-           <p class="muted small">
-             Non c'è nessun programma da creare: il sistema calcola da solo
-             quanta acqua serve e irriga quando il terreno scende sotto
-             soglia. Gli orari e i giorni si impostano nelle schede dei
-             singoli gruppi.
-           </p>
-         </div>`;
+  /* Programma complessivo: si compone dai programmi dei singoli gruppi,
+     ognuno con la propria finestra. Calcolarlo su un'unica finestra di
+     sistema mostrava orari sbagliati — le aiuole alle 04:00 quando la
+     loro finestra è alle 13:45. */
+  _sequenceCard(_schedIgnorato, sys) {
+    const groups = this._overview.groups || {};
+    const options = this._overview.options || {};
+    const ordine = options.categories || ["prato", "aiuole", "orto", "altro"];
+    const etichette = options.category_labels || {};
 
-    const util = Number(sched.utilization || 0);
-    const capacity = runs.length
-      ? `<div class="bar big">
-           <div class="bar-fill${sched.fits ? "" : " over"}" style="width:${Math.min(100, util)}%"></div>
-         </div>
-         <div class="zone-meta">
-           <span>${sched.total_minutes} min su ${sched.window_minutes} disponibili</span>
-           <span class="spacer"></span>
-           <span class="${sched.fits ? "muted" : "warntext"}">${util}%</span>
-         </div>
-         ${
-           sched.fits
-             ? ""
-             : `<ha-alert alert-type="warning">La sequenza sfora la finestra di ${sched.overflow_minutes} min.</ha-alert>`
-         }
-         ${
-           (sched.dropped || []).length
-             ? `<ha-alert alert-type="warning">Escluse per mancanza di tempo: ${esc((sched.dropped || []).join(", "))}</ha-alert>`
-             : ""
-         }`
-      : "";
+    const conRun = ordine
+      .map((key) => ({ key, label: etichette[key] || key, g: groups[key] }))
+      .filter((x) => x.g && ((x.g.schedule || {}).runs || []).length);
+
+    if (!conRun.length) {
+      return `<ha-card><div class="inner">
+        <div class="card-head">
+          <ha-icon icon="mdi:playlist-play"></ha-icon>
+          <h2>Programma di irrigazione</h2>
+        </div>
+        <div class="empty-state">
+          <ha-icon icon="mdi:water-check"></ha-icon>
+          <p>Nessuna irrigazione necessaria adesso.</p>
+          <p class="muted small">
+            Non c'è nessun programma da creare: il sistema calcola da solo
+            quanta acqua serve e irriga quando il terreno scende sotto
+            soglia. Gli orari e i giorni si impostano nelle schede dei
+            singoli gruppi.
+          </p>
+        </div>
+      </div></ha-card>`;
+    }
+
+    const sezioni = conRun
+      .map(({ key, label, g }) => {
+        const sched = g.schedule || {};
+        const prossima = this._nextRunText(g.next_run);
+        return `<div class="sched-group">
+          <div class="row">
+            <ha-icon icon="${esc((options.category_icons || {})[key] || "mdi:sprinkler")}"></ha-icon>
+            <div class="row-main">
+              <span class="row-label">${esc(label)}</span>
+              <span class="sub">finestra ${esc((g.window || {}).label || "")} · ${esc(prossima.text)}</span>
+            </div>
+            <span class="badge run">${sched.total_minutes} min</span>
+          </div>
+          ${(sched.runs || [])
+            .map(
+              (r) => `<div class="row sched-run">
+                <span class="log-time">${esc(r.start)}</span>
+                <div class="row-main"><span class="row-label">${esc(r.zone_name)}</span></div>
+                <span class="reading small">${esc(r.start)}–${esc(r.end)}</span>
+                <span class="badge run">${r.minutes} min</span>
+              </div>`
+            )
+            .join("")}
+        </div>`;
+      })
+      .join("");
 
     return `<ha-card><div class="inner">
       <div class="card-head">
         <ha-icon icon="mdi:playlist-play"></ha-icon>
         <h2>Programma di irrigazione</h2>
         <span class="spacer"></span>
-        <span class="sub">tutte le linee</span>
+        <span class="sub">ogni gruppo nella sua finestra</span>
       </div>
-      ${body}
-      ${capacity}
+      ${sezioni}
     </div></ha-card>`;
   }
 
@@ -2805,6 +2819,8 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .warntext { color: var(--warning-color, #ffa600); }
       .actions { display: flex; gap: 8px; margin-top: 14px; }
       .tab-actions { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+      .sched-group + .sched-group { margin-top: 10px; }
+      .sched-run { padding-left: 12px; }
 
       /* giorni della settimana: un interruttore per giorno */
       .days-row { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }

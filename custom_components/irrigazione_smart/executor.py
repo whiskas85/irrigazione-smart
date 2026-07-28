@@ -217,15 +217,18 @@ class IrrigationExecutor:
 
     async def async_start_sequence(
         self, trigger: str = "manuale", category: str | None = None
-    ) -> None:
+    ) -> bool:
         """Irriga le linee che lo richiedono, in ordine.
 
         Con `category` si irriga un solo gruppo — il prato senza le aiuole,
         per esempio, che hanno irrigatori e tempi diversi.
+
+        Ritorna True solo se l'irrigazione è davvero partita: chi programma
+        deve poter distinguere "fatto" da "non c'era nulla da fare".
         """
         if self.running:
             _LOGGER.warning("Irrigazione già in corso: comando ignorato")
-            return
+            return False
 
         system = self._store.system
         queue: list[tuple[str, float | None]] = []
@@ -246,9 +249,10 @@ class IrrigationExecutor:
                 "Sequenza non avviata: nessuna linea%s richiede acqua",
                 f" del gruppo {category}" if category else "",
             )
-            return
+            return False
 
         self._task = self._hass.async_create_task(self._run(queue, trigger=trigger))
+        return True
 
     async def async_stop(self) -> None:
         """Ferma tutto e chiude la valvola in corso."""

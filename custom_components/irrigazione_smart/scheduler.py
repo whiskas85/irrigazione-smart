@@ -118,17 +118,28 @@ class IrrigationScheduler:
             if start is None or now_minutes != start:
                 continue
 
+            label = CATEGORY_LABELS.get(category, category)
+            partita = await executor.async_start_sequence(
+                trigger="programmato", category=category
+            )
+
+            if not partita:
+                # Nessuna linea sotto soglia: il gruppo NON si segna come
+                # eseguito. Marcarlo qui significherebbe che spostando la
+                # finestra più avanti nella giornata — o forzando un
+                # deficit dopo — l'irrigazione non partirebbe più fino al
+                # giorno successivo.
+                _LOGGER.debug("%s: orario raggiunto, nessuna linea da irrigare", label)
+                continue
+
+            # una sola partenza automatica al giorno per gruppo
             self._store.async_update_group(category, {"last_auto_run": today})
 
-            label = CATEGORY_LABELS.get(category, category)
             _LOGGER.info("Avvio automatico del gruppo %s", label)
             activity = get_log(self._hass)
             if activity is not None:
                 activity.add("started", f"{label}: avvio automatico programmato")
 
-            await executor.async_start_sequence(
-                trigger="programmato", category=category
-            )
             # un gruppo per volta: l'impianto ha una sola pressione
             return
 
