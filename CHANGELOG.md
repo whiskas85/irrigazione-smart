@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-28
+
 ### Modificato
 - **Le passate si alternano fra le linee: dieci ore diventano due e
   mezza.** Un ciclo non è "irriga e aspetta", è *irriga* e poi lascia
