@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-07-28
+
 ### Corretto
 - **L'avvio automatico si bloccava per il resto della giornata.** Il gruppo
   veniva marcato come "già eseguito oggi" *prima* di sapere se
