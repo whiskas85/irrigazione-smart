@@ -8,6 +8,27 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Corretto
+- **Dentro la finestra, ma non irrigava.** Il programmatore scattava solo
+  nell'*istante esatto* dell'orario di inizio: impostare la finestra alle
+  14:28 quando erano già le 14:29 rimandava tutto al giorno dopo. Peggio,
+  se Home Assistant era spento o stava riavviando a quell'ora,
+  l'irrigazione di quella giornata **saltava del tutto**. Ora la finestra
+  è ciò che dice di essere — l'intervallo in cui l'irrigazione è
+  permessa — e la partenza avviene appena possibile al suo interno,
+  restando comunque una sola al giorno per gruppo
+- Quando si è dentro la finestra e l'irrigazione non è ancora partita, la
+  pagina scrive **"in finestra adesso"** invece di un orario di domani
+
+### Aggiunto
+- **Niente più ricaricamento forzato del browser.** L'indirizzo del
+  pannello porta ora un'impronta del contenuto, non solo la versione:
+  cambia a ogni modifica del file, quindi il browser è costretto a
+  riscaricarlo da sé. Utile soprattutto sul telefono, dove svuotare la
+  cache non è alla portata di tutti
+- La **versione in esecuzione** è mostrata accanto al titolo: si verifica a
+  colpo d'occhio se l'aggiornamento è arrivato davvero
+
 ## [0.9.1] - 2026-07-28
 
 ### Corretto

@@ -21,6 +21,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import CATEGORY_LABELS, CATEGORY_ORDER, DOMAIN
 from .executor import get_executor
+from .hydro import TimeWindow
 from .logbook import get_log
 from .store import WEEKDAYS, IrrigazioneStore
 
@@ -38,6 +39,16 @@ def _hhmm_to_minutes(value: str | None) -> int | None:
         hours, _, minutes = value.partition(":")
         return int(hours) * 60 + int(minutes[:2])
     except ValueError:
+        return None
+
+
+def _window_of(group: dict[str, Any]) -> TimeWindow | None:
+    """Finestra del gruppo, gestendo anche lo scavalco di mezzanotte."""
+    try:
+        return TimeWindow.from_strings(
+            group.get("window_start") or "", group.get("window_end") or ""
+        )
+    except (ValueError, IndexError):
         return None
 
 
@@ -63,27 +74,41 @@ class IrrigationScheduler:
         if not days:
             return {"scheduled": False, "reason": "nessun_giorno_attivo"}
 
+        window = _window_of(group)
         start = _hhmm_to_minutes(group.get("window_start"))
-        if start is None:
+        if window is None or start is None:
             return {"scheduled": False, "reason": "finestra_non_valida"}
 
         now = dt_util.now()
         now_minutes = now.hour * 60 + now.minute
+        today_key = WEEKDAYS[now.weekday()]
 
-        # si cerca il primo giorno utile, oggi compreso se l'orario non è
-        # ancora passato
-        for offset in range(8):
+        # Se siamo già dentro la finestra e oggi non è ancora partita, il
+        # momento buono è adesso: la finestra dice quando è permesso
+        # irrigare, non solo l'istante in cui cominciare.
+        if (
+            today_key in days
+            and window.contains(now_minutes)
+            and group.get("last_auto_run") != now.date().isoformat()
+        ):
+            return {
+                "scheduled": True,
+                "when": now.isoformat(),
+                "today": True,
+                "now": True,
+            }
+
+        # altrimenti il prossimo inizio utile
+        for offset in range(1, 8):
             day = now + timedelta(days=offset)
             if WEEKDAYS[day.weekday()] not in days:
-                continue
-            if offset == 0 and now_minutes >= start:
                 continue
             return {
                 "scheduled": True,
                 "when": day.replace(
                     hour=start // 60, minute=start % 60, second=0, microsecond=0
                 ).isoformat(),
-                "today": offset == 0,
+                "today": False,
             }
 
         return {"scheduled": False, "reason": "nessun_giorno_attivo"}
@@ -114,8 +139,12 @@ class IrrigationScheduler:
             if group.get("last_auto_run") == today:
                 continue
 
-            start = _hhmm_to_minutes(group.get("window_start"))
-            if start is None or now_minutes != start:
+            # Basta essere dentro la finestra, non centrarne l'istante
+            # iniziale: così l'irrigazione parte anche se Home Assistant
+            # era spento a quell'ora, o se la finestra viene spostata a
+            # cavallo dell'orario corrente.
+            window = _window_of(group)
+            if window is None or not window.contains(now_minutes):
                 continue
 
             label = CATEGORY_LABELS.get(category, category)

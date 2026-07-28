@@ -426,6 +426,11 @@ class IrrigazioneSmartPanel extends HTMLElement {
         <div slot="title" class="app-title">
           <ha-icon icon="mdi:sprinkler-variant"></ha-icon>
           <span>Irrigazione Smart</span>
+          ${
+            this._overview && this._overview.version
+              ? `<span class="app-version" title="Versione in esecuzione">${esc(this._overview.version)}</span>`
+              : ""
+          }
         </div>
         <div class="tabs">
           ${this._tabs()
@@ -887,6 +892,9 @@ class IrrigazioneSmartPanel extends HTMLElement {
         ok: false,
       };
     }
+    // dentro la finestra e non ancora partita: il momento è adesso
+    if (next.now) return { text: "in finestra adesso", ok: true };
+
     const d = new Date(next.when);
     const two = (n) => String(n).padStart(2, "0");
     const ora = `${two(d.getHours())}:${two(d.getMinutes())}`;
@@ -2770,6 +2778,9 @@ class IrrigazioneSmartPanel extends HTMLElement {
     return `
       :host { display: block; height: 100%; background: var(--primary-background-color); }
       .app-title { display: flex; align-items: center; gap: 8px; }
+      .app-version { font-size: 12px; font-weight: 400; opacity: .7;
+                     padding: 2px 8px; border-radius: 10px;
+                     background: rgba(255,255,255,.15); }
 
       .tabs { display: flex; gap: 4px; padding: 0 8px; overflow-x: auto;
               background: var(--app-header-background-color, var(--primary-color));

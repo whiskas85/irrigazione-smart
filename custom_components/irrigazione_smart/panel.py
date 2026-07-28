@@ -10,6 +10,7 @@ ricalcolati qui: arrivano da `hydro.py`, che resta l'unica fonte di verità.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -185,6 +186,9 @@ def _build_overview(hass: HomeAssistant) -> dict[str, Any]:
 
     return {
         "configured": True,
+        # mostrata in pagina: permette di verificare a colpo d'occhio se
+        # l'aggiornamento è davvero arrivato al browser
+        "version": hass.data.get(DOMAIN, {}).get("panel_version", "?"),
         "system": {
             "latitude": config.get(CONF_LATITUDE),
             "longitude": config.get(CONF_LONGITUDE),
@@ -730,6 +734,23 @@ class SystemView(HomeAssistantView):
         return self.json({"overview": _build_overview(hass)})
 
 
+def _asset_fingerprint(www_dir: Path, version: str) -> str:
+    """Identificativo che cambia ogni volta che il pannello cambia.
+
+    L'indirizzo del JavaScript porta questo valore: se cambia, il browser
+    è costretto a riscaricarlo. Legarlo alla sola versione non basta —
+    due build della stessa versione avrebbero lo stesso indirizzo e
+    resterebbe in cache, costringendo l'utente al ricaricamento forzato,
+    che sul telefono è scomodo o impossibile.
+    """
+    try:
+        content = (www_dir / f"{COMPONENT_NAME}.js").read_bytes()
+        digest = hashlib.sha256(content).hexdigest()[:10]
+    except OSError:
+        digest = "0"
+    return f"{version}.{digest}"
+
+
 async def async_setup_store(hass: HomeAssistant) -> IrrigazioneStore:
     """Carica lo storage una volta sola e lo condivide nel dominio."""
     domain_data = hass.data.setdefault(DOMAIN, {})
@@ -770,11 +791,19 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
 
     if not domain_data.get(_PANEL_FLAG):
         integration = await async_get_integration(hass, DOMAIN)
+        # la lettura del file non va fatta nel loop degli eventi
+        fingerprint = await hass.async_add_executor_job(
+            _asset_fingerprint,
+            Path(__file__).parent / "www",
+            str(integration.version),
+        )
+        domain_data["panel_version"] = str(integration.version)
+
         await panel_custom.async_register_panel(
             hass,
             webcomponent_name=COMPONENT_NAME,
             frontend_url_path=PANEL_URL_PATH,
-            module_url=f"{STATIC_URL}/{COMPONENT_NAME}.js?v={integration.version}",
+            module_url=f"{STATIC_URL}/{COMPONENT_NAME}.js?v={fingerprint}",
             sidebar_title=PANEL_TITLE,
             sidebar_icon=PANEL_ICON,
             require_admin=False,
