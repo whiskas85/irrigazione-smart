@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-28
+
 ### Aggiunto
 - **Grafici**. Il sistema archivia ogni notte il riepilogo della giornata
   (90 giorni) e lo mostra:
