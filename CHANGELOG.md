@@ -8,6 +8,16 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Corretto
+- **«480 L/h → 10 mm/h» prometteva una conversione mai avvenuta.** I litri
+  da soli non dicono quanto bagnano: serve la superficie. Senza, il motore
+  ripiega sui mm/h del campo apposito e i litri non entrano in nessun
+  conto — ma la riga della linea mostrava lo stesso la freccia, facendo
+  credere che il numero a destra venisse da quello a sinistra. Ora, se la
+  superficie manca, la riga scrive «480 L/h senza superficie: in uso 10
+  mm/h» e compare un avviso che spiega cosa inserire. Con la superficie,
+  la freccia dice anche su quanti metri quadri: «480 L/h su 12 m² → 40 mm/h»
+
 ## [1.1.0] - 2026-07-28
 
 ### Aggiunto

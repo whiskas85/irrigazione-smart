@@ -1719,11 +1719,33 @@ class IrrigazioneSmartPanel extends HTMLElement {
 
   /* Portata: si mostra il valore inserito dall'utente e, se è in litri,
      anche i mm/h che ne derivano — quelli con cui il motore calcola. */
+  /* La freccia "480 L/h → 10 mm/h" va scritta solo se la conversione è
+     davvero avvenuta.
+
+     I litri da soli non dicono quanto bagnano: serve la superficie. Se
+     manca, il motore ripiega sui mm/h del campo apposito e i litri non
+     entrano in nessun conto — ma la riga mostrava lo stesso la freccia,
+     facendo credere che il numero a destra venisse da quello a sinistra. */
   _rateText(z) {
     const mm = `${z.rate_mm_h} mm/h`;
     if (!z.rate_mode || z.rate_mode === "mm_h" || !z.flow_value) return mm;
+
     const unita = z.rate_mode === "l_min" ? "L/min" : "L/h";
-    return `${z.flow_value} ${unita} → ${mm}`;
+    if (!(Number(z.area_m2) > 0)) {
+      return `${z.flow_value} ${unita} senza superficie: in uso ${mm}`;
+    }
+    return `${z.flow_value} ${unita} su ${z.area_m2} m² → ${mm}`;
+  }
+
+  /* True se la portata è stata inserita in litri ma manca la superficie:
+     i litri non vengono usati e la durata esce da un numero di riserva. */
+  _rateIncomplete(z) {
+    return (
+      z.rate_mode &&
+      z.rate_mode !== "mm_h" &&
+      !!z.flow_value &&
+      !(Number(z.area_m2) > 0)
+    );
   }
 
   /* Ultima irrigazione: le forzature si segnalano ma restano secondarie
@@ -1859,10 +1881,21 @@ class IrrigazioneSmartPanel extends HTMLElement {
       </div>
       <div class="zone-meta">
         <span><b>${deficit.toFixed(1)}</b> mm deficit</span>
-        <span class="muted">soglia ${threshold.toFixed(1)} · TAW ${taw.toFixed(1)} mm · ${esc(this._rateText(z))}</span>
+        <span class="${this._rateIncomplete(z) ? "warntext" : "muted"}">soglia ${threshold.toFixed(1)} · TAW ${taw.toFixed(1)} mm · ${esc(this._rateText(z))}</span>
         <span class="spacer"></span>
         ${valve}
       </div>
+      ${
+        this._rateIncomplete(z)
+          ? `<ha-alert alert-type="warning">
+               La portata è in litri ma manca la superficie della zona, quindi
+               i litri non vengono usati: la durata esce dai ${z.rate_mm_h} mm/h
+               del campo apposito. Un litro su un metro quadro fa un
+               millimetro — senza sapere su quanti metri quadri cade, i litri
+               non dicono quanto bagnano.
+             </ha-alert>`
+          : ""
+      }
       ${
         plan.should_run
           ? `<div class="zone-plan">
@@ -3661,7 +3694,10 @@ class IrrigazioneSmartPanel extends HTMLElement {
       },
       {
         key: "area_m2", label: "Superficie della zona", type: "number", suffix: "m²",
-        helper: "Un litro su un metro quadro fa un millimetro: serve a convertire",
+        helper:
+          "Obbligatoria se la portata è in litri: senza, i litri vengono " +
+          "ignorati. È l'area che questa linea bagna davvero, e la portata " +
+          "è la somma di tutti gli irrigatori della linea",
       },
       { type: "section", label: "Taratura" },
       {
