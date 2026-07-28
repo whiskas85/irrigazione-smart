@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-28
+
 ### Aggiunto
 - **Prato e aiuole sono gestiti separatamente.** Hanno irrigatori diversi
   — statici e turbine contro ala gocciolante — e quindi portate e durate
