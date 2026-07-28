@@ -98,17 +98,21 @@ class IrrigationScheduler:
                 "now": True,
             }
 
-        # altrimenti il prossimo inizio utile
-        for offset in range(1, 8):
+        # Altrimenti il prossimo inizio utile — **oggi compreso**, se
+        # l'orario di apertura deve ancora arrivare. Ripartire da domani
+        # faceva dire "mercoledì" a una finestra che apriva fra sei minuti.
+        for offset in range(8):
             day = now + timedelta(days=offset)
             if WEEKDAYS[day.weekday()] not in days:
+                continue
+            if offset == 0 and now_minutes >= start:
                 continue
             return {
                 "scheduled": True,
                 "when": day.replace(
                     hour=start // 60, minute=start % 60, second=0, microsecond=0
                 ).isoformat(),
-                "today": False,
+                "today": offset == 0,
             }
 
         return {"scheduled": False, "reason": "nessun_giorno_attivo"}

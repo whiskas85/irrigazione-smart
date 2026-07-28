@@ -1002,20 +1002,46 @@ class IrrigazioneSmartPanel extends HTMLElement {
     const busy = !!(this._overview.running || {}).active;
 
     if (!runs.length) {
+      // Si dice il motivo vero, linea per linea: dare la colpa al
+      // bilancio idrico quando la causa è un'altra manda fuori strada.
+      const zone = (this._overview.zones || []).filter(
+        (z) => (z.category || "altro") === category
+      );
+      const bloccate = zone.filter((z) => {
+        const p = (z.computed || {}).plan || {};
+        return !p.should_run && isBlocked(p.reason);
+      });
+
       return `<ha-card><div class="inner">
         <div class="card-head">
           <ha-icon icon="mdi:playlist-check"></ha-icon>
           <h2>Programma</h2>
         </div>
-        <div class="empty-state">
-          <ha-icon icon="mdi:water-check"></ha-icon>
-          <p>Nessuna irrigazione necessaria adesso.</p>
-          <p class="muted small">
-            Non è un errore: il terreno di ${esc(label.toLowerCase())} non ha ancora
-            perso abbastanza acqua per superare la soglia. Quando la supererà,
-            l'irrigazione partirà da sola alla prossima finestra utile.
-          </p>
-        </div>
+        ${
+          bloccate.length
+            ? `<div class="empty-state">
+                 <ha-icon icon="mdi:cancel"></ha-icon>
+                 <p>Nessuna irrigazione in programma.</p>
+               </div>
+               ${bloccate
+                 .map(
+                   (z) => `<div class="row">
+                     <ha-icon icon="mdi:alert-circle-outline"></ha-icon>
+                     <div class="row-main"><span class="row-label">${esc(z.name)}</span></div>
+                     <span class="badge warn">${esc(reasonLabel(((z.computed || {}).plan || {}).reason))}</span>
+                   </div>`
+                 )
+                 .join("")}`
+            : `<div class="empty-state">
+                 <ha-icon icon="mdi:water-check"></ha-icon>
+                 <p>Nessuna irrigazione necessaria adesso.</p>
+                 <p class="muted small">
+                   Il terreno di ${esc(label.toLowerCase())} non ha ancora perso
+                   abbastanza acqua per superare la soglia. Quando la supererà,
+                   l'irrigazione partirà da sola alla prossima finestra utile.
+                 </p>
+               </div>`
+        }
       </div></ha-card>`;
     }
 
@@ -1055,7 +1081,11 @@ class IrrigazioneSmartPanel extends HTMLElement {
       ${
         sched.fits
           ? ""
-          : `<ha-alert alert-type="warning">La sequenza sfora la finestra di ${sched.overflow_minutes} min.</ha-alert>`
+          : `<ha-alert alert-type="warning">
+               L'irrigazione dura più della finestra: sforerà di
+               ${sched.overflow_minutes} min. Una volta partita viene portata a
+               termine — allarga la finestra se vuoi che rientri.
+             </ha-alert>`
       }
     </div></ha-card>`;
   }
@@ -1466,7 +1496,6 @@ class IrrigazioneSmartPanel extends HTMLElement {
 
   _masterCard(sys, zones, running, sched) {
     const on = !!sys.master_enabled;
-    const w = sys.window || {};
     const enabled = zones.filter((z) => z.enabled).length;
     const busy = !!(this._overview.running || {}).active;
 
@@ -1479,7 +1508,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
             <span class="master-title">Irrigazione ${on ? "attiva" : "disattivata"}</span>
             <span class="sub">${
               on
-                ? `finestra ${esc(w.label || "")}`
+                ? "orari e giorni si impostano nelle schede dei gruppi"
                 : "il master generale è spento: nessuna linea verrà irrigata"
             }</span>
           </div>

@@ -297,11 +297,17 @@ def _schedule_payload(
     system: dict[str, Any],
 ) -> dict[str, Any]:
     """Sequenza della notte con la diagnosi di capienza della finestra."""
+    # Il programma mostrato deve dire cosa succederà davvero. La finestra
+    # stabilisce quando l'irrigazione può *cominciare*; una volta partita
+    # l'esecutore la porta a termine, e non scarta nulla. Calcolare qui
+    # con l'esclusione delle linee eccedenti faceva sparire dal programma
+    # una linea che poi veniva comunque irrigata: si mostra tutto e, se
+    # sfora, lo si segnala.
     sched = schedule_sequence(
         plans,
         window,
         gap_minutes=int(system.get("gap_minutes", 5) or 0),
-        allow_overflow=system.get("overflow_policy") != "truncate",
+        allow_overflow=True,
     )
 
     return {

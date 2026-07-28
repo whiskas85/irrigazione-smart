@@ -8,6 +8,26 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Corretto
+- **"Prossima irrigazione mercoledì" con la finestra che apriva fra sei
+  minuti.** Correggendo il programmatore nella 0.9.2 avevo fatto partire
+  la ricerca dal giorno *successivo*, così il caso "l'orario di oggi deve
+  ancora arrivare" non veniva più considerato e si saltava sempre a
+  domani. Ora oggi torna in gioco
+- **Il programma scartava in silenzio le linee che non entravano nella
+  finestra**, e lo stato vuoto dava la colpa al bilancio idrico: una
+  finestra di 14 minuti con una linea da 15 mostrava "nessuna irrigazione
+  necessaria" mentre la linea, poco sopra, diceva "15 min". L'esecutore
+  intanto quella linea l'avrebbe irrigata comunque, perché la finestra
+  stabilisce quando l'irrigazione può *cominciare*, non quanto può durare.
+  Ora il programma mostra ciò che accadrà davvero e, se l'irrigazione
+  supera la finestra, lo dichiara invece di far sparire la linea
+- Quando una linea non è in programma per un motivo diverso dal bilancio
+  idrico (vento, pioggia prevista, giorno escluso), il motivo è scritto
+  linea per linea
+- La dashboard non mostra più la finestra di sistema 04:00–08:00, che non
+  esiste più da quando ogni gruppo ha la propria
+
 ## [0.9.2] - 2026-07-28
 
 ### Corretto
