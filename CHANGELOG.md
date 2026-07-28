@@ -8,6 +8,16 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Corretto
+- **Le tendine non funzionavano di nuovo.** I menu a tendina del frontend
+  si sono rotti due volte in installazioni reali, per motivi diversi. Ora
+  sono `<select>` native **vestite come i campi di Home Assistant** —
+  bordo, angoli, etichetta, colore d'accento al fuoco, freccia: l'aspetto
+  è quello giusto e non possono più smettere di funzionare. I selettori di
+  entità e di icone restano quelli nativi di HA, dove servono davvero
+- I controlli della scheda Log (ricerca e periodo) ora hanno lo stesso
+  aspetto, con l'icona della lente
+
 ## [0.5.0] - 2026-07-28
 
 ### Aggiunto

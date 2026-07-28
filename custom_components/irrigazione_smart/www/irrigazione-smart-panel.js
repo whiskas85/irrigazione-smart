@@ -790,16 +790,26 @@ class IrrigazioneSmartPanel extends HTMLElement {
       </div>
 
       <div class="log-tools">
-        <input class="native log-search" type="search" placeholder="Cerca nel registro…"
-               value="${esc(this._logQuery || "")}">
-        <select class="native log-range">
-          ${ranges
-            .map(
-              (r) =>
-                `<option value="${r.value}"${r.value === days ? " selected" : ""}>${r.label}</option>`
-            )
-            .join("")}
-        </select>
+        <div class="ha-field grow">
+          <div class="ha-field-box">
+            <ha-icon class="ha-field-lead" icon="mdi:magnify"></ha-icon>
+            <input class="ha-control with-lead log-search" type="search"
+                   placeholder="Cerca nel registro" value="${esc(this._logQuery || "")}">
+          </div>
+        </div>
+        <div class="ha-field">
+          <div class="ha-field-box">
+            <select class="ha-control log-range">
+              ${ranges
+                .map(
+                  (r) =>
+                    `<option value="${r.value}"${r.value === days ? " selected" : ""}>${r.label}</option>`
+                )
+                .join("")}
+            </select>
+            <ha-icon class="ha-field-arrow" icon="mdi:menu-down"></ha-icon>
+          </div>
+        </div>
       </div>
       <p class="muted small nomargin">${filtered.length} di ${this._log.length} voci</p>
 
@@ -1360,20 +1370,21 @@ class IrrigazioneSmartPanel extends HTMLElement {
     return row;
   }
 
-  /* Riserva usata solo se `ha-selector` non è disponibile. */
+  /* Riserva usata solo se `ha-selector` non è disponibile. Stesso
+     aspetto dei campi HA, così la pagina resta coerente. */
   _plainField(spec, values) {
     const row = document.createElement("div");
-    row.className = "fld";
+    row.className = "ha-field";
 
-    const lab = document.createElement("span");
-    lab.className = "fld-label";
+    const lab = document.createElement("label");
+    lab.className = "ha-field-label";
     lab.textContent = spec.suffix ? `${spec.label} (${spec.suffix})` : spec.label;
     row.appendChild(lab);
 
     let input;
     if (spec.type === "select" || spec.type === "entity" || spec.type === "icon") {
       input = document.createElement("select");
-      input.className = "native";
+      input.className = "ha-control";
       let items;
       if (spec.type === "entity") {
         items = this._entityOptions(spec.domains, values[spec.key]).map((it) => ({
@@ -1383,7 +1394,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
         items.unshift({ value: "", text: "— nessuna —" });
       } else if (spec.type === "icon") {
         input = document.createElement("input");
-        input.className = "native";
+        input.className = "ha-control";
         input.type = "text";
         input.placeholder = "mdi:flower";
       } else {
@@ -1406,7 +1417,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
       input.checked = !!values[spec.key];
     } else {
       input = document.createElement("input");
-      input.className = "native";
+      input.className = "ha-control";
       input.type = spec.type === "number" ? "number" : spec.type === "time" ? "time" : "text";
       if (spec.type === "number") input.step = "any";
     }
@@ -1440,7 +1451,55 @@ class IrrigazioneSmartPanel extends HTMLElement {
     return row;
   }
 
+  /* Tendina nativa vestita come un campo di Home Assistant.
+
+     I menu a tendina del frontend si sono rotti due volte in ambienti
+     reali (voci non registrate, menu tagliato dentro al dialogo). Una
+     `<select>` nativa non può rompersi: qui le si dà l'aspetto di un
+     campo HA, invece di inseguire il componente. */
+  _styledSelect(spec, values) {
+    const row = document.createElement("div");
+    row.className = "ha-field";
+
+    const lab = document.createElement("label");
+    lab.className = "ha-field-label";
+    lab.textContent = spec.label;
+
+    const box = document.createElement("div");
+    box.className = "ha-field-box";
+
+    const select = document.createElement("select");
+    select.className = "ha-control";
+    (spec.options || []).forEach((option) => {
+      const opt = document.createElement("option");
+      opt.value = option;
+      opt.textContent = spec.labels ? label(spec.labels, option) : option;
+      select.appendChild(opt);
+    });
+    select.value = values[spec.key] ?? (spec.options || [])[0] ?? "";
+    select.addEventListener("change", () => {
+      values[spec.key] = select.value;
+    });
+
+    const arrow = document.createElement("ha-icon");
+    arrow.className = "ha-field-arrow";
+    arrow.setAttribute("icon", "mdi:menu-down");
+
+    box.append(select, arrow);
+    row.append(lab, box);
+
+    if (spec.helper) {
+      const help = document.createElement("span");
+      help.className = "fld-helper";
+      help.textContent = spec.helper;
+      row.appendChild(help);
+    }
+    return row;
+  }
+
   _makeField(spec, values) {
+    // Le tendine restano native: è l'unico modo per cui funzionino sempre.
+    if (spec.type === "select") return this._styledSelect(spec, values);
     return has("ha-selector")
       ? this._haField(spec, values)
       : this._plainField(spec, values);
@@ -1891,9 +1950,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
                        border-radius: 8px; }
 
       /* strumenti del registro */
-      .log-tools { display: flex; gap: 8px; margin: 4px 0 8px; flex-wrap: wrap; }
-      .log-tools .log-search { flex: 1 1 200px; }
-      .log-tools .log-range { flex: 0 0 auto; width: auto; }
+      .log-tools { display: flex; gap: 10px; margin: 10px 0 8px; flex-wrap: wrap; align-items: flex-end; }
       .log-day { font-size: 12px; font-weight: 600; text-transform: uppercase;
                  letter-spacing: .04em; color: var(--secondary-text-color);
                  margin: 16px 0 2px; }
@@ -1972,14 +2029,46 @@ class IrrigazioneSmartPanel extends HTMLElement {
       /* campi di riserva, quando ha-textfield/ha-select non esistono */
       .fld { display: flex; flex-direction: column; gap: 4px; }
       .fld-label { font-size: 12px; color: var(--secondary-text-color); }
-      .fld-helper { font-size: 11px; color: var(--secondary-text-color); }
+      .fld-helper { font-size: 11px; color: var(--secondary-text-color); padding-left: 2px; }
       .native { font-family: inherit; font-size: 14px; padding: 10px; border-radius: 6px;
                 border: 1px solid var(--divider-color); background: var(--secondary-background-color);
                 color: var(--primary-text-color); width: 100%; box-sizing: border-box; }
 
+      /* Campo disegnato come quelli di Home Assistant: bordo sottile,
+         etichetta sopra, colore d'accento al fuoco. Usato per le tendine
+         e per i controlli del registro. */
+      .ha-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+      .ha-field.grow { flex: 1 1 200px; }
+      .ha-field-label { font-size: 12px; color: var(--secondary-text-color); padding-left: 2px; }
+      .ha-field-box { position: relative; display: flex; align-items: center; }
+      .ha-control {
+        width: 100%; box-sizing: border-box; font-family: inherit; font-size: 15px;
+        padding: 13px 40px 13px 15px; border-radius: 4px;
+        border: 1px solid var(--mdc-text-field-outlined-idle-border-color, rgba(127,127,127,.45));
+        background: var(--mdc-text-field-fill-color, transparent);
+        color: var(--primary-text-color);
+        appearance: none; -webkit-appearance: none;
+      }
+      .ha-control.with-lead { padding-left: 42px; padding-right: 15px; }
+      .ha-control:hover {
+        border-color: var(--mdc-text-field-outlined-hover-border-color, rgba(127,127,127,.8));
+      }
+      .ha-control:focus {
+        outline: none; border-color: var(--primary-color); border-width: 2px;
+        padding: 12px 39px 12px 14px;
+      }
+      .ha-control.with-lead:focus { padding-left: 41px; padding-right: 14px; }
+      .ha-field-arrow, .ha-field-lead {
+        position: absolute; pointer-events: none; color: var(--secondary-text-color);
+      }
+      .ha-field-arrow { right: 10px; }
+      .ha-field-lead { left: 12px; --mdc-icon-size: 20px; }
+      /* le opzioni sono disegnate dal sistema: si forza il tema scuro */
+      .ha-control option { background: var(--card-background-color); color: var(--primary-text-color); }
+
       .form { display: flex; flex-direction: column; gap: 14px; min-width: 300px; }
       .form ha-textfield { width: 100%; }
-      .form select.native { max-width: 100%; }
+      .form select.ha-control { max-width: 100%; }
       /* fallback dialogo: usato solo se ha-dialog non è registrato */
       .dlg-fallback { position: fixed; inset: 0; z-index: 99; display: flex;
                       align-items: center; justify-content: center; background: rgba(0,0,0,.45); }
@@ -1996,3 +2085,4 @@ class IrrigazioneSmartPanel extends HTMLElement {
 }
 
 customElements.define("irrigazione-smart-panel", IrrigazioneSmartPanel);
+
