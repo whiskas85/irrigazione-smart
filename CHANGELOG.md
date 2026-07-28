@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-28
+
 ### Corretto
 - **I form ora usano i selettori nativi di Home Assistant** (`ha-selector`,
   lo stesso componente dei config flow): selettore di entità con ricerca
