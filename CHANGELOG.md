@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-07-28
+
 ### Aggiunto
 - **Mappa del giardino.** Nuova scheda con la planimetria — una foto
   aerea, un disegno, uno screenshot di una mappa — e sopra le aree
