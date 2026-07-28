@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-07-28
+
 ### Corretto
 - **La ricerca nel registro accettava una lettera sola.** A ogni tasto si
   ridisegnava l'intera pagina, distruggendo il campo: il cursore spariva e
