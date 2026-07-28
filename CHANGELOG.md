@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-28
+
 ### Aggiunto
 - **Card di Home Assistant accanto alla mappa.** La previsione meteo, una
   markdown col riassunto di quello che farà l'irrigazione, vento e
