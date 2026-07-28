@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-07-28
+
 ### Corretto
 - **I giorni della settimana sembravano ignorare il clic.** Il giorno si
   accendeva solo dopo la risposta del server e il ridisegno della pagina:
