@@ -8,6 +8,13 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-07-28
+
+### Note
+Nessuna modifica funzionale: rilascio di verifica, per controllare che su
+un'installazione agganciata alle release la notifica di aggiornamento
+compaia da sola in HACS.
+
 ## [0.7.3] - 2026-07-28
 
 ### Corretto
