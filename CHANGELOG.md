@@ -8,6 +8,34 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Aggiunto
+- **L'irrigazione ora parte da sola** (`scheduler.py`). Prima il sistema
+  calcolava il bilancio e mostrava il piano, ma nessuno apriva le valvole
+  all'ora giusta: bisognava premere il pulsante. Allo scoccare dell'orario
+  di inizio, nei giorni attivi, il gruppo parte e irriga le linee sotto
+  soglia. Una sola partenza automatica al giorno per gruppo, e un gruppo
+  per volta: l'impianto ha una sola pressione
+- **Una scheda per gruppo** (Prato, Aiuole, Orto), ognuna con:
+  - la propria **finestra oraria** e i propri **giorni della settimana**,
+    da accendere e spegnere con un tocco
+  - il proprio interruttore di gruppo e l'avvio automatico separato
+  - **quando partirà la prossima irrigazione**, detto in chiaro
+    ("oggi alle 06:30", "giovedì alle 04:00"), o il motivo per cui non
+    partirà
+  - il programma di quel gruppo con orari e durate
+- Le linee sono bloccate nei giorni non attivi del loro gruppo, e la
+  pagina lo dice invece di lasciarlo intuire
+
+### Modificato
+- **"Sequenza della notte" si chiama ora "Programma di irrigazione"**: la
+  finestra è libera, se la si imposta alle 21 non è notte e il nome era
+  sbagliato
+- Lo stato vuoto non dice più soltanto "nessuna irrigazione prevista":
+  spiega che non c'è nessun programma da creare a mano, perché è il
+  bilancio idrico a decidere, e indica dove si impostano orari e giorni
+- Le impostazioni comuni non contengono più la finestra oraria, che ora
+  appartiene ai singoli gruppi
+
 ## [0.6.0] - 2026-07-28
 
 ### Aggiunto

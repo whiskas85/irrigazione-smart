@@ -12,7 +12,12 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
-from .const import STORAGE_KEY, STORAGE_SAVE_DELAY, STORAGE_VERSION
+from .const import (
+    CATEGORY_ORDER,
+    STORAGE_KEY,
+    STORAGE_SAVE_DELAY,
+    STORAGE_VERSION,
+)
 
 try:  # disponibile nelle versioni recenti di Home Assistant
     from homeassistant.util.ulid import ulid_now
@@ -67,6 +72,21 @@ ACTION_FIELDS: dict[str, Any] = {
     "hook": "after_irrigation",
     "service": "",
     "data": "{}",
+}
+
+# Impostazioni di ogni gruppo. Prato e aiuole hanno irrigatori diversi e
+# quindi anche orari diversi: le aiuole a goccia possono partire col vento
+# e più tardi, il prato no.
+WEEKDAYS: list[str] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+DEFAULT_GROUP: dict[str, Any] = {
+    "enabled": True,
+    "window_start": "04:00",
+    "window_end": "08:00",
+    "days": list(WEEKDAYS),
+    # avvio automatico all'inizio della finestra, nei giorni attivi
+    "auto": True,
+    "last_auto_run": None,
 }
 
 # Campi accettati su una zona, con il valore usato quando non arrivano.
@@ -146,6 +166,7 @@ class IrrigazioneStore:
                 "daily": {**DEFAULT_DAILY, **(stored.get("daily") or {})},
                 "notifications": stored.get("notifications") or {},
                 "actions": stored.get("actions") or {},
+                "groups": stored.get("groups") or {},
             }
         else:
             self._data = {
@@ -154,8 +175,30 @@ class IrrigazioneStore:
                 "daily": dict(DEFAULT_DAILY),
                 "notifications": {},
                 "actions": {},
+                "groups": {},
             }
+
+        self._ensure_groups()
         return self._data
+
+    def _ensure_groups(self) -> None:
+        """Crea i gruppi mancanti, ereditando la finestra di sistema.
+
+        Chi aggiorna da una versione precedente aveva un'unica finestra:
+        la si copia su tutti i gruppi, così l'impianto continua a
+        comportarsi come prima finché non si differenzia.
+        """
+        system = self._data["system"]
+        for key in CATEGORY_ORDER:
+            group = self._data["groups"].get(key) or {}
+            start = system.get("window_start", DEFAULT_GROUP["window_start"])
+            end = system.get("window_end", DEFAULT_GROUP["window_end"])
+            self._data["groups"][key] = {
+                **DEFAULT_GROUP,
+                "window_start": start,
+                "window_end": end,
+                **group,
+            }
 
     @property
     def data(self) -> dict[str, Any]:
@@ -301,6 +344,26 @@ class IrrigazioneStore:
         return True
 
     # ------------------------------------------------ notifiche e azioni
+
+    @property
+    def groups(self) -> dict[str, Any]:
+        return self._data["groups"]
+
+    def group(self, category: str) -> dict[str, Any]:
+        """Impostazioni di un gruppo, coi default se non configurato."""
+        return self._data["groups"].get(category) or dict(DEFAULT_GROUP)
+
+    def async_update_group(
+        self, category: str, payload: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        group = self._data["groups"].get(category)
+        if group is None:
+            return None
+        for key in DEFAULT_GROUP:
+            if key in payload:
+                group[key] = payload[key]
+        self._save()
+        return group
 
     @property
     def notifications(self) -> dict[str, Any]:

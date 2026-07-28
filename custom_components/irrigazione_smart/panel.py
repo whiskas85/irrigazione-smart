@@ -21,6 +21,7 @@ from homeassistant.exceptions import Unauthorized
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.loader import async_get_integration
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CATEGORY_ICONS,
@@ -52,7 +53,8 @@ from .hydro import (
 )
 from .logbook import get_log
 from .notifier import HOOK_LABELS, build_context, get_notifier
-from .store import IrrigazioneStore
+from .scheduler import get_scheduler
+from .store import WEEKDAYS, IrrigazioneStore
 
 PANEL_URL_PATH = "irrigazione-smart"
 PANEL_TITLE = "Irrigazione"
@@ -150,17 +152,30 @@ def _build_overview(hass: HomeAssistant) -> dict[str, Any]:
 
     # Un solo passaggio sul motore: gli stessi piani servono sia alle righe
     # delle zone sia alla sequenza della notte.
+    # giorno della settimana corrente, per dire il vero sui gruppi che oggi
+    # non irrigano
+    today_key = WEEKDAYS[dt_util.now().weekday()]
+
     zones: list[dict[str, Any]] = []
     plans: list[tuple[str, str, RunPlan]] = []
     for zone in store.zones_sorted():
+        category = zone_category(zone.get("zone_type"))
+        group = store.group(category)
         params = resolve_zone_params(zone, system)
         plan = evaluate_zone(
-            zone, system, float(zone.get("deficit_mm") or 0.0), wind_kmh=wind_kmh
+            zone,
+            system,
+            float(zone.get("deficit_mm") or 0.0),
+            wind_kmh=wind_kmh,
+            day_excluded=(
+                not group.get("enabled", True)
+                or today_key not in (group.get("days") or [])
+            ),
         )
         zones.append(
             {
                 **zone,
-                "category": zone_category(zone.get("zone_type")),
+                "category": category,
                 "computed": _zone_computed(zone, params, plan),
             }
         )
@@ -189,6 +204,7 @@ def _build_overview(hass: HomeAssistant) -> dict[str, Any]:
             },
         },
         "zones": zones,
+        "groups": _groups_payload(hass, store, plans),
         "running": executor.status() if executor else {"active": False},
         "flow": _flow_payload(hass, system),
         "schedule": _schedule_payload(plans, window, system),
@@ -208,6 +224,45 @@ def _build_overview(hass: HomeAssistant) -> dict[str, Any]:
             "category_icons": CATEGORY_ICONS,
         },
     }
+
+
+def _groups_payload(
+    hass: HomeAssistant,
+    store: IrrigazioneStore,
+    plans: list[tuple[str, str, RunPlan]],
+) -> dict[str, Any]:
+    """Impostazioni, finestra e programma di ciascun gruppo."""
+    scheduler = get_scheduler(hass)
+    by_zone = {zone_id: plan for zone_id, _name, plan in plans}
+    out: dict[str, Any] = {}
+
+    for category in CATEGORY_ORDER:
+        group = store.group(category)
+        window = TimeWindow.from_strings(
+            group.get("window_start", "04:00"), group.get("window_end", "08:00")
+        )
+        level, why = window_quality(window)
+
+        zone_plans = [
+            (zone["id"], zone.get("name", ""), by_zone[zone["id"]])
+            for zone in store.zones_sorted()
+            if zone_category(zone.get("zone_type")) == category
+            and zone["id"] in by_zone
+        ]
+
+        out[category] = {
+            **group,
+            "window": {
+                "label": str(window),
+                "duration_min": window.duration_min,
+                "quality": level,
+                "quality_reason": why,
+            },
+            "next_run": scheduler.next_run(category) if scheduler else {},
+            "schedule": _schedule_payload(zone_plans, window, store.system),
+        }
+
+    return out
 
 
 def _flow_payload(hass: HomeAssistant, system: dict[str, Any]) -> dict[str, Any]:
@@ -420,6 +475,28 @@ class LogView(HomeAssistantView):
         return self.json({"entries": []})
 
 
+class GroupView(HomeAssistantView):
+    """Finestra, giorni e avvio automatico di un gruppo."""
+
+    url = "/api/irrigazione_smart/groups/{category}"
+    name = "api:irrigazione_smart:group"
+    requires_auth = True
+
+    async def post(self, request, category: str):
+        _require_admin(request)
+        hass: HomeAssistant = request.app["hass"]
+        store = _get_store(hass)
+        if store is None:
+            return self.json_message("Integration non configurata", 400)
+
+        payload = await request.json()
+        if store.async_update_group(category, payload) is None:
+            return self.json_message("Gruppo non trovato", 404)
+
+        _notify(hass)
+        return self.json({"overview": _build_overview(hass)})
+
+
 class ItemsView(HomeAssistantView):
     """Creazione di notifiche e azioni."""
 
@@ -614,6 +691,7 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
         hass.http.register_view(SystemView())
         hass.http.register_view(ZoneMoveView())
         hass.http.register_view(LogView())
+        hass.http.register_view(GroupView())
         hass.http.register_view(ItemsView())
         hass.http.register_view(ItemDetailView())
         hass.http.register_view(RunView())

@@ -13,6 +13,7 @@ from .executor import IrrigationExecutor
 from .logbook import IrrigazioneLog, async_subscribe_events
 from .notifier import Notifier
 from .panel import async_remove_panel, async_setup_panel, async_setup_store
+from .scheduler import IrrigationScheduler
 from .services import async_setup_services
 
 _LOGGER = logging.getLogger(__name__)
@@ -39,6 +40,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN]["notifier"] = notifier
     for unsub in notifier.async_subscribe():
         entry.async_on_unload(unsub)
+
+    scheduler = IrrigationScheduler(hass, store)
+    hass.data[DOMAIN]["scheduler"] = scheduler
+    entry.async_on_unload(scheduler.async_start())
 
     await async_setup_services(hass)
 

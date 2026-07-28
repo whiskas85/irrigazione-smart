@@ -19,13 +19,22 @@ const SENSORS = [
   { key: "irradiance", label: "Irraggiamento", icon: "mdi:white-balance-sunny" },
 ];
 
-const TABS = [
+/* Le schede fisse. Prato, Aiuole e Orto si aggiungono in mezzo, perché
+   sono impianti diversi con orari propri e vanno tenuti separati. */
+const BASE_TABS = [
   { id: "dashboard", label: "Dashboard", icon: "mdi:view-dashboard-outline" },
-  { id: "zone", label: "Zone", icon: "mdi:sprinkler-variant" },
+];
+const TAIL_TABS = [
   { id: "meteo", label: "Meteo", icon: "mdi:weather-partly-cloudy" },
   { id: "azioni", label: "Azioni", icon: "mdi:bell-cog-outline" },
   { id: "log", label: "Log", icon: "mdi:format-list-bulleted" },
 ];
+
+const DAY_LABELS = {
+  mon: "Lun", tue: "Mar", wed: "Mer", thu: "Gio",
+  fri: "Ven", sat: "Sab", sun: "Dom",
+};
+const DAY_ORDER = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
 /* Segnaposto utilizzabili nei messaggi delle notifiche. */
 const PLACEHOLDERS =
@@ -311,6 +320,31 @@ class IrrigazioneSmartPanel extends HTMLElement {
     }
   }
 
+  /* Schede: una per gruppo che abbia linee, più Prato e Aiuole sempre
+     presenti — sono i due impianti che l'utente si aspetta di trovare. */
+  _tabs() {
+    const options = (this._overview && this._overview.options) || {};
+    const order = options.categories || ["prato", "aiuole", "orto", "altro"];
+    const labels = options.category_labels || {};
+    const icons = options.category_icons || {};
+    const zones = (this._overview && this._overview.zones) || [];
+
+    const groupTabs = order
+      .filter(
+        (key) =>
+          key === "prato" ||
+          key === "aiuole" ||
+          zones.some((z) => (z.category || "altro") === key)
+      )
+      .map((key) => ({
+        id: `g:${key}`,
+        label: labels[key] || key,
+        icon: icons[key] || "mdi:sprinkler-variant",
+      }));
+
+    return [...BASE_TABS, ...groupTabs, ...TAIL_TABS];
+  }
+
   // ------------------------------------------------------------- render
 
   _render() {
@@ -323,11 +357,13 @@ class IrrigazioneSmartPanel extends HTMLElement {
           <span>Irrigazione Smart</span>
         </div>
         <div class="tabs">
-          ${TABS.map(
-            (t) => `<button class="tab${t.id === this._tab ? " active" : ""}" data-tab="${t.id}">
+          ${this._tabs()
+            .map(
+              (t) => `<button class="tab${t.id === this._tab ? " active" : ""}" data-tab="${t.id}">
                       <ha-icon icon="${t.icon}"></ha-icon><span>${t.label}</span>
                     </button>`
-          ).join("")}
+            )
+            .join("")}
         </div>
         <div class="content">${this._body()}</div>
       </ha-top-app-bar-fixed>
@@ -360,6 +396,34 @@ class IrrigazioneSmartPanel extends HTMLElement {
         categoria: e.currentTarget.getAttribute("data-cat"),
       })
     );
+    onClick(".edit-group", () => this._openGroupDialog(this._tab.slice(2)));
+    onClick(".day-chip", (e) => {
+      const el = e.currentTarget;
+      const cat = el.getAttribute("data-cat");
+      const day = el.getAttribute("data-day");
+      const group = (this._overview.groups || {})[cat] || {};
+      const days = new Set(group.days || []);
+      if (days.has(day)) days.delete(day);
+      else days.add(day);
+      // si mantiene l'ordine della settimana, non quello dei clic
+      const ordered = DAY_ORDER.filter((d) => days.has(d));
+      this._mutate("POST", `groups/${cat}`, { days: ordered });
+    });
+
+    sr.querySelectorAll("[data-group-toggle]").forEach((el) => {
+      el.addEventListener("change", (e) =>
+        this._mutate("POST", `groups/${el.getAttribute("data-group-toggle")}`, {
+          enabled: !!e.target.checked,
+        })
+      );
+    });
+    sr.querySelectorAll("[data-group-auto]").forEach((el) => {
+      el.addEventListener("change", (e) =>
+        this._mutate("POST", `groups/${el.getAttribute("data-group-auto")}`, {
+          auto: !!e.target.checked,
+        })
+      );
+    });
     onClick(".stop-all", () => this._mutate("POST", "stop", {}));
     onClick(".run-zone", (e) =>
       this._openForceDialog(e.currentTarget.getAttribute("data-id"))
@@ -539,7 +603,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
       ? `<ha-alert alert-type="error">${esc(this._error)}</ha-alert>`
       : "";
 
-    if (this._tab === "zone") return err + this._zoneTab();
+    if (this._tab.startsWith("g:")) return err + this._groupTab(this._tab.slice(2));
     if (this._tab === "meteo") return err + this._meteoTab();
     if (this._tab === "log") return err + this._logTab();
     if (this._tab === "azioni") return err + this._actionsTab();
@@ -686,6 +750,187 @@ class IrrigazioneSmartPanel extends HTMLElement {
       },
       existing ? "Salva" : "Aggiungi"
     );
+  }
+
+  // -------------------------------------------------------- SCHEDA GRUPPO
+
+  /* Quando partirà, detto in italiano. */
+  _nextRunText(next) {
+    if (!next || !next.scheduled) {
+      return {
+        text: {
+          master_disattivo: "il master generale è spento",
+          gruppo_disattivato: "questo gruppo è disattivato",
+          avvio_automatico_spento: "avvio automatico spento: parte solo a mano",
+          nessun_giorno_attivo: "nessun giorno attivo",
+          finestra_non_valida: "orario di inizio non valido",
+        }[(next || {}).reason] || "non programmato",
+        ok: false,
+      };
+    }
+    const d = new Date(next.when);
+    const two = (n) => String(n).padStart(2, "0");
+    const ora = `${two(d.getHours())}:${two(d.getMinutes())}`;
+    if (next.today) return { text: `oggi alle ${ora}`, ok: true };
+    const giorno = d.toLocaleDateString("it-IT", { weekday: "long" });
+    return { text: `${giorno} alle ${ora}`, ok: true };
+  }
+
+  _groupTab(category) {
+    const groups = this._overview.groups || {};
+    const group = groups[category];
+    const options = this._overview.options || {};
+    const label = (options.category_labels || {})[category] || category;
+    const icon = (options.category_icons || {})[category] || "mdi:sprinkler-variant";
+    const zones = (this._overview.zones || []).filter(
+      (z) => (z.category || "altro") === category
+    );
+
+    if (!group) return `<ha-alert alert-type="error">Gruppo sconosciuto.</ha-alert>`;
+
+    const w = group.window || {};
+    const next = this._nextRunText(group.next_run);
+    const days = group.days || [];
+
+    const dayChips = DAY_ORDER.map(
+      (d) => `<button type="button" class="day-chip${days.includes(d) ? " on" : ""}"
+                 data-day="${d}" data-cat="${esc(category)}">${DAY_LABELS[d]}</button>`
+    ).join("");
+
+    return `
+      <ha-card><div class="inner">
+        <div class="master-row">
+          <div class="master-icon${group.enabled ? " on" : ""}">
+            <ha-icon icon="${esc(icon)}"></ha-icon>
+          </div>
+          <div class="master-main">
+            <span class="master-title">${esc(label)}</span>
+            <span class="sub">${zones.length} ${zones.length === 1 ? "linea" : "linee"} · prossima irrigazione ${esc(next.text)}</span>
+          </div>
+          <ha-switch data-group-toggle="${esc(category)}" ${group.enabled ? "checked" : ""}></ha-switch>
+        </div>
+      </div></ha-card>
+
+      <ha-card><div class="inner">
+        <div class="card-head">
+          <ha-icon icon="mdi:calendar-clock"></ha-icon>
+          <h2>Quando irrigare</h2>
+          <span class="spacer"></span>
+          ${this._button("edit-group", "Modifica", {})}
+        </div>
+        <p class="muted small nomargin">
+          Il sistema decide da solo <b>quanta</b> acqua serve. Qui si stabilisce
+          soltanto <b>quando</b> può darla: all'orario di inizio, nei giorni
+          attivi, parte e irriga le linee sotto soglia.
+        </p>
+
+        <div class="row">
+          <ha-icon icon="mdi:clock-outline"></ha-icon>
+          <div class="row-main">
+            <span class="row-label">Finestra ${esc(w.label || "")}</span>
+            <span class="sub">${esc(w.quality_reason || "")}</span>
+          </div>
+          <span class="badge q-${esc(w.quality)}">${esc(w.quality || "")}</span>
+        </div>
+
+        <div class="row">
+          <ha-icon icon="mdi:play-circle-outline"></ha-icon>
+          <div class="row-main">
+            <span class="row-label">Avvio automatico</span>
+            <span class="sub">${group.auto ? esc(next.text) : "spento: parte solo a mano"}</span>
+          </div>
+          <ha-switch data-group-auto="${esc(category)}" ${group.auto ? "checked" : ""}></ha-switch>
+        </div>
+
+        <div class="days-row">
+          <span class="fld-label">Giorni attivi</span>
+          <div class="day-chips">${dayChips}</div>
+        </div>
+      </div></ha-card>
+
+      ${this._groupScheduleCard(group, label, category)}
+
+      <div class="tab-actions">
+        ${this._button("add-zone", "Aggiungi linea", { primary: true })}
+      </div>
+      ${
+        zones.length
+          ? `<ha-card><div class="inner">
+               <div class="card-head">
+                 <ha-icon icon="${esc(icon)}"></ha-icon><h2>Linee</h2>
+               </div>
+               ${zones.map((z) => this._zoneRow(z)).join("")}
+             </div></ha-card>`
+          : `<ha-card><div class="inner"><div class="empty-state">
+               <ha-icon icon="mdi:sprinkler-variant"></ha-icon>
+               <p>Nessuna linea in questo gruppo.</p>
+             </div></div></ha-card>`
+      }`;
+  }
+
+  /* Programma del gruppo: cosa farà alla prossima partenza. */
+  _groupScheduleCard(group, label, category) {
+    const sched = group.schedule || {};
+    const runs = sched.runs || [];
+    const busy = !!(this._overview.running || {}).active;
+
+    if (!runs.length) {
+      return `<ha-card><div class="inner">
+        <div class="card-head">
+          <ha-icon icon="mdi:playlist-check"></ha-icon>
+          <h2>Programma</h2>
+        </div>
+        <div class="empty-state">
+          <ha-icon icon="mdi:water-check"></ha-icon>
+          <p>Nessuna irrigazione necessaria adesso.</p>
+          <p class="muted small">
+            Non è un errore: il terreno di ${esc(label.toLowerCase())} non ha ancora
+            perso abbastanza acqua per superare la soglia. Quando la supererà,
+            l'irrigazione partirà da sola alla prossima finestra utile.
+          </p>
+        </div>
+      </div></ha-card>`;
+    }
+
+    const util = Number(sched.utilization || 0);
+    return `<ha-card><div class="inner">
+      <div class="card-head">
+        <ha-icon icon="mdi:playlist-check"></ha-icon>
+        <h2>Programma</h2>
+        <span class="spacer"></span>
+        ${
+          busy
+            ? ""
+            : `<button type="button" class="btn primary run-group" data-cat="${esc(category)}">Avvia ora</button>`
+        }
+      </div>
+      ${runs
+        .map(
+          (r) => `<div class="row">
+            <ha-icon icon="mdi:clock-outline"></ha-icon>
+            <div class="row-main">
+              <span class="row-label">${esc(r.zone_name)}</span>
+              <span class="sub">${r.cycles > 1 ? r.cycles + " cicli" : "ciclo unico"}</span>
+            </div>
+            <span class="reading small">${esc(r.start)}–${esc(r.end)}</span>
+            <span class="badge run">${r.minutes} min</span>
+          </div>`
+        )
+        .join("")}
+      <div class="bar big">
+        <div class="bar-fill${sched.fits ? "" : " over"}" style="width:${Math.min(100, util)}%"></div>
+      </div>
+      <div class="zone-meta">
+        <span>${sched.total_minutes} min su ${sched.window_minutes} disponibili</span>
+        <span class="spacer"></span>
+        <span class="${sched.fits ? "muted" : "warntext"}">${util}%</span>
+      </div>
+      ${
+        sched.fits
+          ? ""
+          : `<ha-alert alert-type="warning">La sequenza sfora la finestra di ${sched.overflow_minutes} min.</ha-alert>`
+      }
+    </div></ha-card>`;
   }
 
   // ---------------------------------------------------------------- LOG
@@ -835,6 +1080,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
       ${this._masterCard(sys, zones, running, sched)}
       ${this._linesCard(zones)}
       ${this._sequenceCard(sched, sys)}
+      ${this._systemCard(sys)}
     `;
   }
 
@@ -1057,9 +1303,14 @@ class IrrigazioneSmartPanel extends HTMLElement {
             <span class="badge run">${r.minutes} min</span>
           </div>`).join("")
       : `<div class="empty-state">
-           <ha-icon icon="mdi:sleep"></ha-icon>
-           <p>Nessuna irrigazione prevista.</p>
-           <p class="muted small">Tutte le linee sono sotto soglia o bloccate.</p>
+           <ha-icon icon="mdi:water-check"></ha-icon>
+           <p>Nessuna irrigazione necessaria adesso.</p>
+           <p class="muted small">
+             Non c'è nessun programma da creare: il sistema calcola da solo
+             quanta acqua serve e irriga quando il terreno scende sotto
+             soglia. Gli orari e i giorni si impostano nelle schede dei
+             singoli gruppi.
+           </p>
          </div>`;
 
     const util = Number(sched.utilization || 0);
@@ -1087,9 +1338,9 @@ class IrrigazioneSmartPanel extends HTMLElement {
     return `<ha-card><div class="inner">
       <div class="card-head">
         <ha-icon icon="mdi:playlist-play"></ha-icon>
-        <h2>Sequenza della notte</h2>
+        <h2>Programma di irrigazione</h2>
         <span class="spacer"></span>
-        <span class="sub">${esc((sys.window || {}).label || "")}</span>
+        <span class="sub">tutte le linee</span>
       </div>
       ${body}
       ${capacity}
@@ -1097,49 +1348,6 @@ class IrrigazioneSmartPanel extends HTMLElement {
   }
 
   // -------------------------------------------------------------- ZONE
-
-  _zoneTab() {
-    const zones = this._overview.zones || [];
-
-    if (!zones.length) {
-      return `<ha-card><div class="inner">
-          <div class="card-head">
-            <ha-icon icon="mdi:sprinkler"></ha-icon>
-            <h2>Zone e linee</h2>
-            <span class="spacer"></span>
-            ${this._button("add-zone", "Aggiungi zona", { primary: true })}
-          </div>
-          <div class="empty-state">
-            <ha-icon icon="mdi:sprinkler-variant"></ha-icon>
-            <p>Nessuna zona configurata.</p>
-            <p class="muted small">Aggiungi la prima zona per iniziare a calcolare il bilancio idrico.</p>
-            <div class="empty-cta">${this._button("add-zone", "Aggiungi zona", { primary: true })}</div>
-          </div>
-        </div></ha-card>
-        ${this._systemCard(this._overview.system)}`;
-    }
-
-    // Una card per gruppo, così i parametri del prato non si confondono
-    // con quelli delle aiuole.
-    const groups = this._groupZones(zones)
-      .map(
-        (group) => `<ha-card><div class="inner">
-          <div class="card-head">
-            <ha-icon icon="${esc(group.icon)}"></ha-icon>
-            <h2>${esc(group.label)}</h2>
-            <span class="sub">${group.zones.length} ${group.zones.length === 1 ? "linea" : "linee"}</span>
-          </div>
-          ${group.zones.map((z) => this._zoneRow(z)).join("")}
-        </div></ha-card>`
-      )
-      .join("");
-
-    return `<div class="tab-actions">
-        ${this._button("add-zone", "Aggiungi zona", { primary: true })}
-      </div>
-      ${groups}
-      ${this._systemCard(this._overview.system)}`;
-  }
 
   _zoneRow(z) {
     const c = z.computed || {};
@@ -1206,28 +1414,17 @@ class IrrigazioneSmartPanel extends HTMLElement {
   }
 
   _systemCard(sys) {
-    const w = sys.window || {};
-    const qIcon = {
-      ottimale: "mdi:check-circle",
-      accettabile: "mdi:alert-circle-outline",
-      sconsigliata: "mdi:close-circle",
-    }[w.quality] || "mdi:clock-outline";
-
     return `<ha-card><div class="inner">
         <div class="card-head">
           <ha-icon icon="mdi:cog-outline"></ha-icon>
-          <h2>Impostazioni sistema</h2>
+          <h2>Impostazioni comuni</h2>
           <span class="spacer"></span>
           ${this._button("edit-system", "Modifica")}
         </div>
-        <div class="row">
-          <ha-icon icon="${qIcon}"></ha-icon>
-          <div class="row-main">
-            <span class="row-label">Finestra ${esc(w.label || "")}</span>
-            <span class="sub">${esc(w.quality_reason || "")}</span>
-          </div>
-          <span class="badge q-${esc(w.quality)}">${esc(w.quality || "")}</span>
-        </div>
+        <p class="muted small nomargin">
+          Valgono per tutti i gruppi. Orari e giorni si impostano invece
+          nella scheda di ciascun gruppo.
+        </p>
         <div class="row">
           <ha-icon icon="mdi:shovel"></ha-icon>
           <div class="row-main"><span class="row-label">Terreno predefinito</span></div>
@@ -1770,12 +1967,36 @@ class IrrigazioneSmartPanel extends HTMLElement {
     );
   }
 
+  _openGroupDialog(category) {
+    const group = (this._overview.groups || {})[category];
+    if (!group) return;
+    const options = this._overview.options || {};
+    const label = (options.category_labels || {})[category] || category;
+
+    this._showForm(
+      `Quando irrigare — ${label}`,
+      [
+        { key: "window_start", label: "Inizio finestra", type: "time",
+          helper: "L'irrigazione parte a quest'ora, nei giorni attivi" },
+        { key: "window_end", label: "Fine finestra", type: "time",
+          helper: "Entro quest'ora l'irrigazione dovrebbe essere conclusa" },
+        { key: "auto", label: "Avvio automatico", type: "boolean" },
+      ],
+      {
+        window_start: group.window_start,
+        window_end: group.window_end,
+        auto: !!group.auto,
+      },
+      async (values) => {
+        await this._mutate("POST", `groups/${category}`, values);
+      }
+    );
+  }
+
   _openSystemDialog() {
     const sys = this._overview.system;
     const opts = this._overview.options || {};
     const specs = [
-      { key: "window_start", label: "Inizio finestra", type: "time" },
-      { key: "window_end", label: "Fine finestra", type: "time" },
       {
         key: "soil", label: "Terreno predefinito", type: "select",
         options: opts.soils || [], labels: SOIL_LABELS,
@@ -1807,8 +2028,6 @@ class IrrigazioneSmartPanel extends HTMLElement {
     ];
 
     const initial = {
-      window_start: sys.window_start,
-      window_end: sys.window_end,
       soil: sys.soil,
       soak_minutes: sys.soak_minutes,
       gap_minutes: sys.gap_minutes,
@@ -1997,6 +2216,17 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .warntext { color: var(--warning-color, #ffa600); }
       .actions { display: flex; gap: 8px; margin-top: 14px; }
       .tab-actions { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+
+      /* giorni della settimana: un interruttore per giorno */
+      .days-row { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+      .day-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+      .day-chip { font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer;
+                  min-width: 46px; padding: 8px 10px; border-radius: 18px;
+                  border: 1px solid var(--divider-color); background: none;
+                  color: var(--secondary-text-color); transition: all .15s; }
+      .day-chip:hover { border-color: var(--primary-color); }
+      .day-chip.on { background: var(--primary-color); border-color: transparent;
+                     color: var(--text-primary-color, #fff); }
       .card-head .sub { flex: 0 0 auto; }
 
       /* pallino di stato: verde ok, giallo assetata, rosso in carenza,
