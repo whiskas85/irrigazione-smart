@@ -8,6 +8,21 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Corretto
+- **I form ora usano i selettori nativi di Home Assistant** (`ha-selector`,
+  lo stesso componente dei config flow): selettore di entità con ricerca
+  per la valvola e per il flussostato, selettore di icone con anteprima,
+  tendine e campi numerici con l'aspetto di sempre. I componenti vengono
+  creati da JavaScript impostandone le proprietà: costruirli scrivendo
+  HTML non funziona, ed è la causa dei campi vuoti e delle tendine che non
+  cambiavano
+- **I pulsanti nella finestra di dialogo erano invisibili**: erano
+  assegnati agli slot `primaryAction`/`secondaryAction`, che non esistono
+  in tutte le versioni di `ha-dialog`. Ora stanno nel corpo del dialogo e
+  si vedono sempre
+- Se i selettori non sono disponibili si usano controlli equivalenti, così
+  il form resta utilizzabile su qualunque versione del frontend
+
 ## [0.3.0] - 2026-07-28
 
 ### Aggiunto
