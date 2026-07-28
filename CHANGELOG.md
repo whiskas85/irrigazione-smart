@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-07-28
+
 ### Corretto
 - **Dentro la finestra, ma non irrigava.** Il programmatore scattava solo
   nell'*istante esatto* dell'orario di inizio: impostare la finestra alle
