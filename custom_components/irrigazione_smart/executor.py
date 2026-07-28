@@ -496,6 +496,10 @@ class IrrigationExecutor:
             last_duration_min=round(total_minutes, 1),
             last_trigger="forzata" if minutes is not None else "automatica",
         )
+        # minuti della giornata, per il grafico dell'irrigazione nel tempo
+        self._store.async_add_irrigation(
+            zone_category(zone.get("zone_type")), round(total_minutes, 1)
+        )
 
         next_zone = self._store.zones.get(next_zone_id) if next_zone_id else None
         self._hass.bus.async_fire(

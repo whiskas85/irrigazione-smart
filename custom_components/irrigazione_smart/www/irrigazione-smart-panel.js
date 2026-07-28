@@ -85,6 +85,30 @@ const SOURCE_LABELS = {
 const INHERIT_NUM = -1;
 const INHERIT_STR = "eredita";
 
+/* Colori dei grafici.
+
+   Non arrivano dal tema di Home Assistant: servono tinte che restino
+   distinguibili anche a chi non percepisce bene i colori, e quelle vanno
+   scelte e verificate. Questi tre slot sono stati validati sulle
+   superfici reali delle card HA (chiaro #ffffff, scuro #1c1c1c): passano
+   banda di luminosità, soglia di croma, separazione per daltonismo e
+   distanza a vista normale. Il verde acqua resta sotto 3:1 sul chiaro,
+   perciò ogni serie porta sempre anche l'etichetta e la tabella. */
+const CHART_COLORS = {
+  light: ["#2a78d6", "#eb6834", "#1baf7a"],
+  dark: ["#3987e5", "#d95926", "#199e70"],
+};
+
+const chartPalette = () => {
+  // il tema di HA non espone un flag: si deduce dalla luminosità del testo
+  const ink = getComputedStyle(document.documentElement)
+    .getPropertyValue("--primary-text-color")
+    .trim();
+  const m = ink.match(/\d+/g);
+  const scuro = m ? Number(m[0]) > 128 : false;
+  return scuro ? CHART_COLORS.dark : CHART_COLORS.light;
+};
+
 /* Non tutte le versioni del frontend registrano gli stessi componenti
    (`mwc-button` e `mwc-list-item` mancano nelle più recenti). Si verifica
    a runtime cosa esiste davvero: se manca, si usa un controllo HTML
@@ -437,6 +461,18 @@ class IrrigazioneSmartPanel extends HTMLElement {
     );
     onClick(".edit-system", () => this._openSystemDialog());
     onClick(".edit-sources", () => this._openSourcesDialog());
+    // la tabella è l'equivalente leggibile del grafico, non un extra
+    onClick(".toggle-table", (e) => {
+      const card = e.currentTarget.closest(".inner");
+      const tabella = card && card.querySelector(".data-table");
+      if (!tabella) return;
+      const mostrata = tabella.classList.toggle("shown");
+      e.currentTarget.textContent = mostrata ? "Grafico" : "Tabella";
+      const grafico = card.querySelector(".chart");
+      if (grafico) grafico.style.display = mostrata ? "none" : "";
+      const legenda = card.querySelector(".legend");
+      if (legenda) legenda.style.display = mostrata ? "none" : "";
+    });
     onClick(".retry", () => this._fetchOverview());
     onClick(".run-all", () => this._mutate("POST", "run", {}));
     onClick(".run-group", (e) =>
@@ -1016,6 +1052,195 @@ class IrrigazioneSmartPanel extends HTMLElement {
     </div></ha-card>`;
   }
 
+  // ------------------------------------------------------------- GRAFICI
+
+  async _fetchHistory() {
+    try {
+      const res = await this._api("GET", "history");
+      this._history = (res && res.entries) || [];
+    } catch (_e) {
+      this._history = [];
+    }
+    this._render();
+  }
+
+  _dayTick(iso) {
+    const d = new Date(iso);
+    return isNaN(d) ? "" : `${d.getDate()}/${d.getMonth() + 1}`;
+  }
+
+  /* Struttura comune: cornice, griglia orizzontale a filo, asse discreto.
+     Nessuna griglia verticale e nessun tratteggio: aggiungono rumore e
+     basta. */
+  _chartFrame(id, { width = 640, height = 170, pad = 28 } = {}) {
+    return {
+      id, width, height,
+      left: pad + 18, right: width - 10,
+      top: 10, bottom: height - 22,
+      get w() { return this.right - this.left; },
+      get h() { return this.bottom - this.top; },
+    };
+  }
+
+  /* L'unità non si scrive dentro al grafico: finirebbe addosso al valore
+     più alto dell'asse. Sta nel sottotitolo della card. */
+  _axisAndGrid(f, min, max, ticks = 3) {
+    const parts = [];
+    for (let i = 0; i <= ticks; i++) {
+      const v = min + ((max - min) * i) / ticks;
+      const y = f.bottom - ((v - min) / (max - min || 1)) * f.h;
+      parts.push(
+        `<line class="c-grid" x1="${f.left}" y1="${y.toFixed(1)}" x2="${f.right}" y2="${y.toFixed(1)}"></line>`,
+        `<text class="c-tick" x="${f.left - 6}" y="${(y + 3.5).toFixed(1)}" text-anchor="end">${
+          Math.abs(max - min) < 5 ? v.toFixed(1) : Math.round(v)
+        }</text>`
+      );
+    }
+    return parts.join("");
+  }
+
+  _xLabels(f, entries) {
+    // solo alcune etichette: una per ogni punto sarebbe illeggibile
+    const step = Math.max(1, Math.ceil(entries.length / 6));
+    return entries
+      .map((e, i) => {
+        if (i % step !== 0 && i !== entries.length - 1) return "";
+        const x = f.left + (entries.length === 1 ? f.w / 2 : (i / (entries.length - 1)) * f.w);
+        return `<text class="c-tick" x="${x.toFixed(1)}" y="${f.bottom + 14}" text-anchor="middle">${this._dayTick(e.date)}</text>`;
+      })
+      .join("");
+  }
+
+  /* Fascia minima–massima: una sola grandezza, una sola tinta. */
+  _bandChart(entries, color) {
+    const f = this._chartFrame("temp");
+    const vals = entries.flatMap((e) => [e.t_min, e.t_max]).filter((v) => v != null);
+    if (!vals.length) return "";
+    const min = Math.floor(Math.min(...vals) - 1);
+    const max = Math.ceil(Math.max(...vals) + 1);
+    const x = (i) => f.left + (entries.length === 1 ? f.w / 2 : (i / (entries.length - 1)) * f.w);
+    const y = (v) => f.bottom - ((v - min) / (max - min || 1)) * f.h;
+
+    const alto = entries.map((e, i) => `${x(i).toFixed(1)},${y(e.t_max).toFixed(1)}`);
+    const basso = entries.map((e, i) => `${x(i).toFixed(1)},${y(e.t_min).toFixed(1)}`).reverse();
+    const ultimo = entries[entries.length - 1];
+
+    return `<svg class="chart" viewBox="0 0 ${f.width} ${f.height}" preserveAspectRatio="none" role="img">
+      ${this._axisAndGrid(f, min, max)}
+      <polygon class="c-band" points="${[...alto, ...basso].join(" ")}" fill="${color}"></polygon>
+      <polyline class="c-line" points="${alto.join(" ")}" stroke="${color}"></polyline>
+      <polyline class="c-line c-thin" points="${basso.slice().reverse().join(" ")}" stroke="${color}"></polyline>
+      ${this._xLabels(f, entries)}
+      <text class="c-endlabel" x="${(x(entries.length - 1) - 4).toFixed(1)}" y="${(y(ultimo.t_max) - 6).toFixed(1)}" text-anchor="end">${ultimo.t_max}°</text>
+      <text class="c-endlabel" x="${(x(entries.length - 1) - 4).toFixed(1)}" y="${(y(ultimo.t_min) + 13).toFixed(1)}" text-anchor="end">${ultimo.t_min}°</text>
+    </svg>`;
+  }
+
+  /* Serie singola: area tenue più linea sottile. */
+  _areaChart(entries, key, color, { min0 = false } = {}) {
+    const f = this._chartFrame("area");
+    const vals = entries.map((e) => e[key]).filter((v) => v != null);
+    if (!vals.length) return "";
+    const min = min0 ? 0 : Math.floor(Math.min(...vals) - 2);
+    const max = Math.ceil(Math.max(...vals) + 2);
+    const x = (i) => f.left + (entries.length === 1 ? f.w / 2 : (i / (entries.length - 1)) * f.w);
+    const y = (v) => f.bottom - ((v - min) / (max - min || 1)) * f.h;
+
+    const punti = entries
+      .map((e, i) => (e[key] == null ? null : `${x(i).toFixed(1)},${y(e[key]).toFixed(1)}`))
+      .filter(Boolean);
+    if (!punti.length) return "";
+    const area = `${f.left},${f.bottom} ${punti.join(" ")} ${x(entries.length - 1).toFixed(1)},${f.bottom}`;
+    const ultimo = [...entries].reverse().find((e) => e[key] != null);
+
+    return `<svg class="chart" viewBox="0 0 ${f.width} ${f.height}" preserveAspectRatio="none" role="img">
+      ${this._axisAndGrid(f, min, max)}
+      <polygon class="c-band" points="${area}" fill="${color}"></polygon>
+      <polyline class="c-line" points="${punti.join(" ")}" stroke="${color}"></polyline>
+      ${this._xLabels(f, entries)}
+      ${
+        ultimo
+          ? `<text class="c-endlabel" x="${(x(entries.length - 1) - 4).toFixed(1)}" y="${(y(ultimo[key]) - 7).toFixed(1)}" text-anchor="end">${Math.round(ultimo[key])}</text>`
+          : ""
+      }
+    </svg>`;
+  }
+
+  /* Barre impilate per gruppo: qui le serie SONO il soggetto. */
+  _stackedBars(entries, categories, colors, labels) {
+    const f = this._chartFrame("bars");
+    const totale = (e) =>
+      categories.reduce((s, c) => s + Number((e.irrigated || {})[c] || 0), 0);
+    const max = Math.max(10, Math.ceil(Math.max(...entries.map(totale)) / 10) * 10);
+
+    const passo = f.w / entries.length;
+    const larghezza = Math.max(3, Math.min(22, passo - 4));
+
+    const barre = entries
+      .map((e, i) => {
+        const cx = f.left + passo * i + passo / 2;
+        let y = f.bottom;
+        const segmenti = categories
+          .map((c, ci) => {
+            const v = Number((e.irrigated || {})[c] || 0);
+            if (v <= 0) return "";
+            const h = (v / max) * f.h;
+            y -= h;
+            // 2px di stacco fra i segmenti: separa senza disegnare bordi
+            const alt = Math.max(1, h - 2);
+            return `<rect class="c-bar" x="${(cx - larghezza / 2).toFixed(1)}" y="${y.toFixed(1)}"
+              width="${larghezza}" height="${alt.toFixed(1)}" rx="2" fill="${colors[ci]}"></rect>`;
+          })
+          .join("");
+        return segmenti;
+      })
+      .join("");
+
+    return `<svg class="chart" viewBox="0 0 ${f.width} ${f.height}" preserveAspectRatio="none" role="img">
+      ${this._axisAndGrid(f, 0, max)}
+      ${barre}
+      ${this._xLabels(f, entries)}
+    </svg>`;
+  }
+
+  _legend(labels, colors) {
+    return `<div class="legend">${labels
+      .map(
+        (l, i) =>
+          `<span class="legend-item"><span class="swatch" style="background:${colors[i]}"></span>${esc(l)}</span>`
+      )
+      .join("")}</div>`;
+  }
+
+  _chartCard(titolo, icona, sottotitolo, contenuto, tabellaId) {
+    return `<ha-card><div class="inner">
+      <div class="card-head">
+        <ha-icon icon="${icona}"></ha-icon>
+        <h2>${esc(titolo)}</h2>
+        <span class="spacer"></span>
+        <button type="button" class="btn toggle-table" data-table="${tabellaId}">Tabella</button>
+      </div>
+      ${sottotitolo ? `<p class="muted small nomargin">${esc(sottotitolo)}</p>` : ""}
+      ${contenuto}
+    </div></ha-card>`;
+  }
+
+  _historyTable(entries, colonne) {
+    const righe = [...entries]
+      .reverse()
+      .map(
+        (e) =>
+          `<tr><td>${esc(e.date || "")}</td>${colonne
+            .map((c) => `<td>${c.get(e) ?? "—"}</td>`)
+            .join("")}</tr>`
+      )
+      .join("");
+    return `<table class="data-table">
+      <thead><tr><th>Giorno</th>${colonne.map((c) => `<th>${esc(c.label)}</th>`).join("")}</tr></thead>
+      <tbody>${righe}</tbody>
+    </table>`;
+  }
+
   // ---------------------------------------------------------------- LOG
 
   async _fetchLog() {
@@ -1190,6 +1415,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
       ${this._masterCard(sys, zones, running, sched)}
       ${this._linesCard(zones)}
       ${this._sequenceCard(sched, sys)}
+      ${this._irrigationChart()}
       ${this._systemCard(sys)}
     `;
   }
@@ -1251,7 +1477,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
           </div>
           <ha-switch data-master ${on ? "checked" : ""}></ha-switch>
         </div>
-        <div class="grid">
+        <div class="c-grid">
           <div class="cell"><span class="k">Linee attive</span><span class="v">${enabled}<span class="of">/${zones.length}</span></span></div>
           <div class="cell"><span class="k">Chiedono acqua</span><span class="v">${running.length}</span></div>
           <div class="cell"><span class="k">Tempo totale</span><span class="v">${sched.total_minutes || 0}<span class="of"> min</span></span></div>
@@ -1388,6 +1614,15 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .join("");
   }
 
+  /* Portata: si mostra il valore inserito dall'utente e, se è in litri,
+     anche i mm/h che ne derivano — quelli con cui il motore calcola. */
+  _rateText(z) {
+    const mm = `${z.rate_mm_h} mm/h`;
+    if (!z.rate_mode || z.rate_mode === "mm_h" || !z.flow_value) return mm;
+    const unita = z.rate_mode === "l_min" ? "L/min" : "L/h";
+    return `${z.flow_value} ${unita} → ${mm}`;
+  }
+
   /* Ultima irrigazione: le forzature si segnalano ma restano secondarie
      rispetto a quelle automatiche. */
   _lastRunText(z) {
@@ -1501,13 +1736,13 @@ class IrrigazioneSmartPanel extends HTMLElement {
         </ha-icon-button>
       </div>
 
-      <div class="bar" title="Deficit ${deficit.toFixed(1)} mm su TAW ${taw.toFixed(1)} mm">
+      <div class="c-bar" title="Deficit ${deficit.toFixed(1)} mm su TAW ${taw.toFixed(1)} mm">
         <div class="bar-fill${deficit >= threshold ? " over" : ""}" style="width:${pct}%"></div>
         <div class="bar-thr" style="left:${thrPct}%"></div>
       </div>
       <div class="zone-meta">
         <span><b>${deficit.toFixed(1)}</b> mm deficit</span>
-        <span class="muted">soglia ${threshold.toFixed(1)} · TAW ${taw.toFixed(1)} mm · ${z.rate_mm_h} mm/h</span>
+        <span class="muted">soglia ${threshold.toFixed(1)} · TAW ${taw.toFixed(1)} mm · ${esc(this._rateText(z))}</span>
         <span class="spacer"></span>
         ${valve}
       </div>
@@ -1560,8 +1795,115 @@ class IrrigazioneSmartPanel extends HTMLElement {
   _meteoTab() {
     return `${this._et0Card()}
       ${this._forecastCard()}
+      ${this._weatherCharts()}
       ${this._sensorsCard(this._overview.system)}
       ${this._locationCard(this._overview.system)}`;
+  }
+
+  /* Temperatura e umidità: due grandezze con scale diverse, quindi due
+     grafici distinti. Sovrapporle su un solo riquadro con due assi
+     inventerebbe una correlazione che nei dati non c'è. */
+  _weatherCharts() {
+    if (this._history === undefined) {
+      this._fetchHistory();
+      return "";
+    }
+    const dati = this._history.slice(-30);
+    if (dati.length < 2) {
+      return `<ha-card><div class="inner">
+        <div class="card-head"><ha-icon icon="mdi:chart-line"></ha-icon><h2>Andamento</h2></div>
+        <div class="empty-state">
+          <ha-icon icon="mdi:chart-line"></ha-icon>
+          <p>Servono almeno due giornate concluse.</p>
+          <p class="muted small">Ogni notte il sistema archivia il riepilogo del giorno: i grafici si popolano da soli.</p>
+        </div>
+      </div></ha-card>`;
+    }
+
+    const c = chartPalette();
+    const conUmidita = dati.some((e) => e.rh_mean != null);
+
+    return `
+      ${this._chartCard(
+        "Temperatura",
+        "mdi:thermometer",
+        `Minima e massima degli ultimi ${dati.length} giorni · °C`,
+        this._bandChart(dati, c[0]) +
+          this._historyTable(dati, [
+            { label: "Min °C", get: (e) => e.t_min },
+            { label: "Max °C", get: (e) => e.t_max },
+          ]),
+        "temp"
+      )}
+      ${
+        conUmidita
+          ? this._chartCard(
+              "Umidità",
+              "mdi:water-percent",
+              "Media giornaliera · %",
+              this._areaChart(dati, "rh_mean", c[2], { min0: true }) +
+                this._historyTable(dati, [{ label: "Umidità %", get: (e) => e.rh_mean }]),
+              "umid"
+            )
+          : ""
+      }
+      ${this._chartCard(
+        "Evapotraspirazione",
+        "mdi:weather-sunny",
+        "Quanta acqua ha perso il terreno, giorno per giorno · mm",
+        this._areaChart(dati, "et0_mm", c[1], { min0: true }) +
+          this._historyTable(dati, [
+            { label: "ET0 mm", get: (e) => e.et0_mm },
+            { label: "Pioggia mm", get: (e) => e.rain_mm },
+          ]),
+        "et0"
+      )}`;
+  }
+
+  /* Minuti irrigati per gruppo: qui i gruppi SONO il soggetto, quindi
+     tinte distinte, legenda ed etichette — mai il colore da solo. */
+  _irrigationChart() {
+    if (this._history === undefined) {
+      this._fetchHistory();
+      return "";
+    }
+    const dati = this._history.slice(-30);
+    const options = this._overview.options || {};
+    const etichette = options.category_labels || {};
+
+    const presenti = (options.categories || ["prato", "aiuole", "orto"]).filter((cat) =>
+      dati.some((e) => Number((e.irrigated || {})[cat] || 0) > 0)
+    );
+
+    if (!dati.length || !presenti.length) {
+      return `<ha-card><div class="inner">
+        <div class="card-head"><ha-icon icon="mdi:chart-bar"></ha-icon><h2>Irrigazione nel tempo</h2></div>
+        <div class="empty-state">
+          <ha-icon icon="mdi:water-off"></ha-icon>
+          <p>Nessuna irrigazione ancora registrata.</p>
+          <p class="muted small">Il grafico si popola dopo la prima notte di irrigazione.</p>
+        </div>
+      </div></ha-card>`;
+    }
+
+    const c = chartPalette().slice(0, presenti.length);
+    const nomi = presenti.map((cat) => etichette[cat] || cat);
+
+    return this._chartCard(
+      "Irrigazione nel tempo",
+      "mdi:chart-bar",
+      `Minuti erogati per gruppo, ultimi ${dati.length} giorni · min`,
+      this._legend(nomi, c) +
+        this._stackedBars(dati, presenti, c, nomi) +
+        this._historyTable(
+          dati,
+          presenti.map((cat, i) => ({
+            label: `${nomi[i]} min`,
+            get: (e) => (e.irrigated || {})[cat] || 0,
+          }))
+        ),
+      "irrig"
+    );
   }
 
   /* Pioggia prevista: è la lettura che fa saltare l'irrigazione quando
@@ -1644,7 +1986,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
                </div>`
         }
         <div class="form-section">Accumulo di oggi</div>
-        <div class="grid">
+        <div class="c-grid">
           <div class="cell"><span class="k">T min</span><span class="v">${num(m.t_min, "°C")}</span></div>
           <div class="cell"><span class="k">T max</span><span class="v">${num(m.t_max, "°C")}</span></div>
           <div class="cell"><span class="k">Pioggia</span><span class="v">${num(m.rain_mm, "mm")}</span></div>
@@ -1766,7 +2108,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
     return `<ha-card><div class="inner">
         <div class="card-head"><ha-icon icon="mdi:map-marker-outline"></ha-icon><h2>Posizione</h2></div>
         <p class="muted small nomargin">Serve al calcolo della radiazione extraterrestre, che dipende da latitudine e giorno dell'anno.</p>
-        <div class="grid">
+        <div class="c-grid">
           <div class="cell"><span class="k">Latitudine</span><span class="v">${this._fmtCoord(sys.latitude)}</span></div>
           <div class="cell"><span class="k">Longitudine</span><span class="v">${this._fmtCoord(sys.longitude)}</span></div>
           <div class="cell"><span class="k">Altitudine</span><span class="v">${sys.elevation ?? "—"} m</span></div>
@@ -2058,6 +2400,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
       rate_mm_h: 10, emitter: "statici", corrector: 1.0, soil: INHERIT_STR,
       kc: INHERIT_NUM, root_depth_cm: INHERIT_NUM, mad: INHERIT_NUM,
       max_runtime_min: INHERIT_NUM, deficit_mm: 0, icon: "",
+      rate_mode: "mm_h", flow_value: undefined, area_m2: undefined,
     };
     const inh = (v) => (v == null || Number(v) === INHERIT_NUM ? "" : v);
 
@@ -2082,10 +2425,30 @@ class IrrigazioneSmartPanel extends HTMLElement {
         key: "icon", label: "Icona", type: "icon",
         helper: "Vuoto = icona predefinita del tipo di zona",
       },
+      { type: "section", label: "Portata" },
       {
-        key: "rate_mm_h", label: "Portata", type: "number", suffix: "mm/h",
-        helper: "Misurata col tuna can test: senza questo dato le durate sono arbitrarie",
+        key: "rate_mode", label: "Unità di misura", type: "select",
+        options: ["mm_h", "l_h", "l_min"],
+        labels: {
+          mm_h: "Millimetri all'ora (mm/h)",
+          l_h: "Litri all'ora (L/h)",
+          l_min: "Litri al minuto (L/min)",
+        },
+        helper: "In litri serve anche la superficie: la stessa portata bagna molto o poco secondo l'area",
       },
+      {
+        key: "rate_mm_h", label: "Portata in mm/h", type: "number", suffix: "mm/h",
+        helper: "Misurata col tuna can test. Usata se l'unità sopra è mm/h",
+      },
+      {
+        key: "flow_value", label: "Portata in litri", type: "number", suffix: "L",
+        helper: "Il valore di targa dell'impianto, all'ora o al minuto",
+      },
+      {
+        key: "area_m2", label: "Superficie della zona", type: "number", suffix: "m²",
+        helper: "Un litro su un metro quadro fa un millimetro: serve a convertire",
+      },
+      { type: "section", label: "Taratura" },
       {
         key: "corrector", label: "Correttore", type: "number",
         helper: "1.0 = nessuna correzione. Si tara osservando il prato",
@@ -2120,6 +2483,9 @@ class IrrigazioneSmartPanel extends HTMLElement {
       emitter: z.emitter,
       icon: z.icon || undefined,
       rate_mm_h: z.rate_mm_h,
+      rate_mode: z.rate_mode || "mm_h",
+      flow_value: z.flow_value ?? undefined,
+      area_m2: z.area_m2 ?? undefined,
       corrector: z.corrector,
       soil: z.soil,
       kc: inh(z.kc),
@@ -2521,6 +2887,35 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .et0-value { font-size: 30px; font-weight: 600; color: var(--primary-text-color); line-height: 1; }
       .et0-value span { font-size: 15px; font-weight: 400; color: var(--secondary-text-color); }
       .et0-meta { display: flex; flex-direction: column; min-width: 0; }
+
+      /* Grafici: marchi sottili, griglia a filo e non tratteggiata,
+         assi discreti. Il colore lo portano solo i dati. */
+      .chart { display: block; width: 100%; height: 170px; margin-top: 10px; overflow: visible; }
+      .chart .c-grid { stroke: var(--divider-color); stroke-width: 1; }
+      .chart .c-tick { fill: var(--secondary-text-color); font-size: 10px;
+                     font-family: inherit; font-variant-numeric: tabular-nums; }
+      .chart .c-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+      .chart .c-line.c-thin { stroke-width: 1.5; opacity: .75; }
+      .chart .c-band { opacity: .16; }
+      .chart .c-endlabel { fill: var(--primary-text-color); font-size: 11px;
+                         font-weight: 600; font-family: inherit; }
+      
+
+      .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; }
+      .legend-item { display: inline-flex; align-items: center; gap: 6px;
+                     font-size: 12px; color: var(--secondary-text-color); }
+      .swatch { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 auto; }
+
+      /* Vista tabellare: l'equivalente leggibile di ogni grafico */
+      .data-table { display: none; width: 100%; border-collapse: collapse;
+                    margin-top: 12px; font-size: 13px; }
+      .data-table.shown { display: table; }
+      .data-table th, .data-table td { text-align: left; padding: 6px 8px;
+                    border-bottom: 1px solid var(--divider-color);
+                    font-variant-numeric: tabular-nums; }
+      .data-table th { font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+                    color: var(--secondary-text-color); font-weight: 600; }
+      .data-table td { color: var(--primary-text-color); }
 
       .origin { color: var(--info-color, var(--primary-color)); }
       .muted { color: var(--secondary-text-color); }

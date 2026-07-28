@@ -8,6 +8,26 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Aggiunto
+- **Grafici**. Il sistema archivia ogni notte il riepilogo della giornata
+  (90 giorni) e lo mostra:
+  - *Meteo*: temperatura (fascia minima–massima), umidità media ed
+    evapotraspirazione. Sono tre grafici separati e non uno solo con più
+    assi: sovrapporre grandezze con scale diverse inventerebbe una
+    correlazione che nei dati non c'è
+  - *Dashboard*: minuti irrigati per gruppo, giorno per giorno
+  - Ogni grafico ha la sua **vista tabellare**: i valori restano leggibili
+    anche senza distinguere i colori
+  - Le tinte sono state verificate sulle superfici reali delle card di
+    Home Assistant, in tema chiaro e scuro, per restare distinguibili
+    anche a chi non percepisce bene i colori
+- **Portata in litri**. Il motore lavora in mm/h, ma i cataloghi degli
+  irrigatori danno litri: ora si può inserire la portata in **L/h** o
+  **L/min** indicando la superficie della zona, e la conversione è
+  automatica (un litro su un metro quadro è alto un millimetro). La riga
+  della linea mostra entrambi i valori, così si rilegge il dato inserito
+  e i mm/h che ne derivano
+
 ## [0.8.0] - 2026-07-28
 
 ### Corretto

@@ -457,6 +457,27 @@ class ZoneMoveView(HomeAssistantView):
         return self.json({"overview": _build_overview(hass)})
 
 
+class HistoryView(HomeAssistantView):
+    """Storico giornaliero per i grafici."""
+
+    url = "/api/irrigazione_smart/history"
+    name = "api:irrigazione_smart:history"
+    requires_auth = True
+
+    async def get(self, request):
+        hass: HomeAssistant = request.app["hass"]
+        store = _get_store(hass)
+        if store is None:
+            return self.json({"entries": [], "categories": {}})
+
+        return self.json(
+            {
+                "entries": store.history,
+                "categories": CATEGORY_LABELS,
+            }
+        )
+
+
 class LogView(HomeAssistantView):
     """Registro attività: lettura e svuotamento."""
 
@@ -737,6 +758,7 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
         hass.http.register_view(ZoneDetailView())
         hass.http.register_view(SystemView())
         hass.http.register_view(ZoneMoveView())
+        hass.http.register_view(HistoryView())
         hass.http.register_view(LogView())
         hass.http.register_view(SourcesView())
         hass.http.register_view(GroupView())

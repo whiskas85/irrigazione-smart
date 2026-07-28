@@ -108,6 +108,12 @@ ZONE_FIELDS: dict[str, Any] = {
     "max_runtime_min": -1,
     # sempre espliciti: descrivono l'impianto
     "rate_mm_h": 10.0,
+    # Come è stata misurata la portata. Il motore lavora in mm/h, ma i
+    # cataloghi danno litri: si conserva anche il dato originale, così
+    # l'utente rilegge quello che ha inserito e non una conversione.
+    "rate_mode": "mm_h",
+    "flow_value": None,
+    "area_m2": None,
     "emitter": "statici",
     "corrector": 1.0,
     "excluded_days": [],
@@ -135,12 +141,45 @@ DEFAULT_DAILY: dict[str, Any] = {
     "wind_n": 0,
     "irr_sum": 0.0,
     "irr_n": 0,
+    # minuti irrigati oggi, per gruppo
+    "irrigated": {},
     # esito dell'ultimo giorno chiuso
     "last_et0_mm": None,
     "last_et0_method": None,
     "last_closed_date": None,
     "last_update": None,
 }
+
+# Giorni di storico conservati per i grafici. Tre mesi bastano a leggere
+# una stagione senza far crescere il file all'infinito.
+HISTORY_DAYS: int = 90
+
+
+def resolve_rate_mm_h(zone: dict[str, Any]) -> float:
+    """Portata in mm/h, comunque l'utente l'abbia inserita.
+
+    Un litro d'acqua steso su un metro quadro è alto un millimetro: da qui
+    la conversione. Serve la superficie della zona, perché la stessa
+    portata in litri bagna molto o poco a seconda di quanto è grande
+    l'area — è il motivo per cui i litri, da soli, non bastano.
+    """
+    mode = zone.get("rate_mode") or "mm_h"
+    if mode == "mm_h":
+        return float(zone.get("rate_mm_h") or 0.0)
+
+    flow = zone.get("flow_value")
+    area = zone.get("area_m2")
+    try:
+        flow = float(flow)
+        area = float(area)
+    except (TypeError, ValueError):
+        return float(zone.get("rate_mm_h") or 0.0)
+
+    if flow <= 0 or area <= 0:
+        return float(zone.get("rate_mm_h") or 0.0)
+
+    litres_per_hour = flow * 60.0 if mode == "l_min" else flow
+    return round(litres_per_hour / area, 2)
 
 
 class IrrigazioneStore:
@@ -167,6 +206,7 @@ class IrrigazioneStore:
                 "notifications": stored.get("notifications") or {},
                 "actions": stored.get("actions") or {},
                 "groups": stored.get("groups") or {},
+                "history": stored.get("history") or [],
             }
         else:
             self._data = {
@@ -176,6 +216,7 @@ class IrrigazioneStore:
                 "notifications": {},
                 "actions": {},
                 "groups": {},
+                "history": [],
             }
 
         self._ensure_groups()
@@ -215,6 +256,30 @@ class IrrigazioneStore:
     @property
     def daily(self) -> dict[str, Any]:
         return self._data["daily"]
+
+    @property
+    def history(self) -> list[dict[str, Any]]:
+        """Storico giornaliero, dal più vecchio al più recente."""
+        return self._data["history"]
+
+    def async_append_history(self, record: dict[str, Any]) -> None:
+        """Aggiunge il riepilogo di un giorno chiuso.
+
+        Se il giorno c'è già lo sostituisce: un riavvio non deve creare
+        doppioni nei grafici.
+        """
+        history = self._data["history"]
+        history[:] = [r for r in history if r.get("date") != record.get("date")]
+        history.append(record)
+        history.sort(key=lambda r: r.get("date") or "")
+        del history[:-HISTORY_DAYS]
+        self._save()
+
+    def async_add_irrigation(self, category: str, minutes: float) -> None:
+        """Somma i minuti irrigati oggi da un gruppo, per i grafici."""
+        irrigated = self._data["daily"].setdefault("irrigated", {})
+        irrigated[category] = round(irrigated.get(category, 0.0) + minutes, 1)
+        self._save()
 
     def async_save_daily(self, daily: dict[str, Any]) -> None:
         """Sostituisce gli accumulatori giornalieri e persiste."""
@@ -268,6 +333,9 @@ class IrrigazioneStore:
         if not zone.get("order"):
             zone["order"] = len(self._data["zones"]) + 1
 
+        # il motore riceve sempre mm/h, qualunque unità sia stata inserita
+        zone["rate_mm_h"] = resolve_rate_mm_h(zone)
+
         self._data["zones"][zone_id] = zone
         self._save()
         return zone
@@ -288,6 +356,8 @@ class IrrigazioneStore:
         # dopo un'irrigazione manuale o una taratura.
         if "deficit_mm" in payload:
             zone["deficit_mm"] = max(0.0, float(payload["deficit_mm"]))
+
+        zone["rate_mm_h"] = resolve_rate_mm_h(zone)
 
         self._save()
         return zone

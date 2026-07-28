@@ -299,6 +299,23 @@ class IrrigazioneCoordinator(DataUpdateCoordinator):
             rain_mm,
             len(self._store.zones),
         )
+        # riepilogo della giornata, per i grafici
+        self._store.async_append_history(
+            {
+                "date": daily.get("date"),
+                "t_min": round(t_min, 1),
+                "t_max": round(t_max, 1),
+                "rh_mean": round(rh_mean, 1) if rh_mean is not None else None,
+                "wind_mean_kmh": (
+                    round(wind_mean * 3.6, 1) if wind_mean is not None else None
+                ),
+                "rain_mm": round(rain_mm, 1),
+                "et0_mm": round(et0.value_mm, 2),
+                "method": et0.method,
+                "irrigated": dict(daily.get("irrigated") or {}),
+            }
+        )
+
         # i sensori esposti leggono lo store: vanno riallineati subito
         async_dispatcher_send(self.hass, SIGNAL_STATE_CHANGED)
 
