@@ -177,6 +177,20 @@ divergono.
 > costringe il browser a ricaricare il JavaScript invece di riusare quello
 > in cache.
 
+### Icona nel catalogo di Home Assistant
+
+L'entità di aggiornamento creata da HACS cerca l'icona su
+`brands.home-assistant.io`, indipendentemente dalle immagini spedite
+dall'integration: se il dominio non è registrato lì, si vede un
+segnaposto grigio.
+
+Si risolve con una pull request a
+[home-assistant/brands](https://github.com/home-assistant/brands),
+aggiungendo `custom_integrations/irrigazione_smart/` con le due immagini
+già presenti in `custom_components/irrigazione_smart/brand/`:
+`icon.png` (256×256) e `icon@2x.png` (512×512), che rispettano già i
+requisiti. È puramente estetico: non cambia nulla nel funzionamento.
+
 L'architettura completa è in **[SPEC.md](SPEC.md)**.
 
 ## Crediti
