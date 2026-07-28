@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-28
+
 ### Aggiunto
 - **Riordino delle linee per trascinamento**, con maniglia dedicata: la
   riga segue il puntatore e la nuova sequenza si salva al rilascio.
