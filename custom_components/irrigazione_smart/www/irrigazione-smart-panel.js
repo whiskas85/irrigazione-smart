@@ -1129,13 +1129,18 @@ class IrrigazioneSmartPanel extends HTMLElement {
             <ha-icon icon="mdi:clock-outline"></ha-icon>
             <div class="row-main">
               <span class="row-label">${esc(r.zone_name)}</span>
-              <span class="sub">${r.cycles > 1 ? r.cycles + " cicli" : "ciclo unico"}</span>
+              <span class="sub">${
+                r.cycles > 1
+                  ? `${r.cycles} passate, alternate con le altre linee`
+                  : "passata unica"
+              }</span>
             </div>
             <span class="reading small">${esc(r.start)}–${esc(r.end)}</span>
-            <span class="badge run">${r.minutes} min</span>
+            <span class="badge run">${r.minutes} min d'acqua</span>
           </div>`
         )
         .join("")}
+      ${this._cycleTimeline(sched)}
       <div class="bar big">
         <div class="bar-fill${sched.fits ? "" : " over"}" style="width:${Math.min(100, util)}%"></div>
       </div>
@@ -1154,6 +1159,37 @@ class IrrigazioneSmartPanel extends HTMLElement {
              </ha-alert>`
       }
     </div></ha-card>`;
+  }
+
+  /* La successione vera delle passate, richiudibile.
+
+     Le righe qui sopra dicono da quando a quando è impegnata una linea,
+     ma con le passate alternate quegli intervalli si sovrappongono e da
+     soli sembrano un errore. Qui si vede cosa succede davvero: mentre
+     una linea assorbe, l'acqua va su un'altra. */
+  _cycleTimeline(sched) {
+    const cycles = sched.cycles || [];
+    if (cycles.length <= 1) return "";
+
+    const righe = cycles
+      .map(
+        (c) => `<div class="cycle-step">
+          <span class="cycle-time">${esc(c.start)}</span>
+          <span class="cycle-name">${esc(c.zone_name)}</span>
+          <span class="cycle-num muted">${c.cycle}/${c.cycles}</span>
+        </div>`
+      )
+      .join("");
+
+    return `<details class="cycle-list">
+      <summary>Sequenza delle passate (${cycles.length})</summary>
+      <p class="muted small nomargin">
+        Un ciclo è irrigare <b>e poi</b> lasciare assorbire. L'attesa di una
+        linea si riempie irrigandone un'altra, così sei linee da quattro
+        passate stanno in una finestra invece che in dieci ore.
+      </p>
+      <div class="cycle-grid">${righe}</div>
+    </details>`;
   }
 
   // ------------------------------------------------------------- GRAFICI
@@ -4105,6 +4141,20 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .map-side > * { margin-bottom: 16px; display: block; }
       .card-json { width: 100%; min-height: 240px; font-family: ui-monospace,
                    SFMono-Regular, Menlo, monospace; font-size: 13px; resize: vertical; }
+
+      /* sequenza delle passate: righe fitte, si scorre con l'occhio */
+      .cycle-list { margin: 10px 0 4px; }
+      .cycle-list summary { cursor: pointer; font-size: 13px;
+                            color: var(--secondary-text-color); padding: 4px 0; }
+      .cycle-grid { display: grid; gap: 2px 12px; margin-top: 8px;
+                    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+      .cycle-step { display: flex; align-items: baseline; gap: 8px; font-size: 13px;
+                    padding: 3px 8px; border-radius: 6px;
+                    background: var(--secondary-background-color); }
+      .cycle-time { font-variant-numeric: tabular-nums; font-weight: 600; }
+      .cycle-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis;
+                    white-space: nowrap; }
+      .cycle-num { font-variant-numeric: tabular-nums; }
 
       .map-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
                      margin-bottom: 12px; }

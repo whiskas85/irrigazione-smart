@@ -311,6 +311,42 @@ il problema della bagnatura fogliare né quello della deriva da vento —
 può girare a qualunque ora. Vincolarla alla stessa finestra del prato
 sprecherebbe capienza preziosa.
 
+### 6.1-bis Le passate si alternano fra le linee
+
+Un ciclo non è "irriga e aspetta": è **irriga**, e poi il terreno deve
+assorbire prima della passata successiva. Tenere la valvola ferma per
+quella mezz'ora è tempo buttato — nel frattempo può bagnare un'altra
+linea.
+
+Sei linee da quattro passate, in sequenza, occupano dieci ore; alternate,
+poco più di due e mezza. È la funzione che i programmatori commerciali
+chiamano *cycle & soak*, e senza di essa la finestra non basta mai.
+
+`hydro.interleave_cycles()` decide l'ordine: a ogni passo si sceglie la
+zona **disponibile prima**; a parità, quella che ha fatto meno passate, e
+solo da ultimo l'ordine di sequenza. Il secondo criterio non è un
+dettaglio — senza, appena scade l'assorbimento della prima zona questa
+rivince ogni pareggio contro le zone in coda, e l'ultima linea non irriga
+finché le altre non hanno finito.
+
+**L'esecutore usa la stessa funzione del programma mostrato in pagina.**
+Se irrigasse in un ordine suo, la pagina mostrerebbe una cosa e
+l'impianto ne farebbe un'altra. Gli orari calcolati servono però solo a
+stabilire la successione: i tempi veri li impone l'esecuzione, che può
+slittare aspettando la conferma di una valvola, e l'assorbimento viene
+riverificato a ogni passata su quanto è passato davvero.
+
+Conseguenze sul resto del sistema:
+
+- l'occupazione della finestra è l'**arco** dalla prima all'ultima
+  passata, non la somma delle durate: le linee si intrecciano
+- la barra di avanzamento conta i **minuti d'acqua**, non l'orologio: fra
+  una passata e l'altra di una linea ne passano altre, e una barra a
+  tempo reale segnerebbe il 100% con un quarto dell'acqua erogata
+- una linea la cui valvola non conferma **non riprova** le passate
+  rimaste: se non ha risposto adesso non risponderà fra dieci minuti, e
+  il suo deficit resta a bilancio per il giorno dopo
+
 ### 6.2 La finestra è un vincolo di capienza
 
 Questo è il vero motivo per cui la finestra va gestita bene. Con

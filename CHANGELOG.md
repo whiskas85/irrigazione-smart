@@ -8,6 +8,26 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Modificato
+- **Le passate si alternano fra le linee: dieci ore diventano due e
+  mezza.** Un ciclo non è "irriga e aspetta", è *irriga* e poi lascia
+  assorbire — e tenere la valvola ferma per quella mezz'ora è tempo
+  buttato, perché nel frattempo può bagnare un'altra linea. Sei linee da
+  quattro passate occupavano 610 minuti su una finestra di 240, con
+  l'avviso di sforamento al 254%; ora sono 161 minuti, il 67%. È la
+  funzione che i programmatori commerciali chiamano *cycle & soak*
+  - L'esecutore usa **la stessa funzione** che disegna il programma in
+    pagina: se irrigasse in un ordine suo, la pagina mostrerebbe una cosa
+    e l'impianto ne farebbe un'altra
+  - Il programma mostra la sequenza reale delle passate, richiudibile.
+    Le righe delle linee ora si sovrappongono nel tempo, ed è giusto così
+  - Il badge di ogni linea dice i **minuti d'acqua**, non l'occupazione
+  - La barra di avanzamento conta i minuti d'acqua e non l'orologio:
+    misurando il tempo reale segnerebbe il 100% quando la linea ha
+    ricevuto un quarto dell'acqua
+  - Una linea la cui valvola non conferma non riprova le passate rimaste:
+    se non risponde adesso non risponderà fra dieci minuti
+
 ## [1.1.1] - 2026-07-28
 
 ### Corretto

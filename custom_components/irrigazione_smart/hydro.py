@@ -14,7 +14,7 @@ Riferimenti:
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 # --------------------------------------------------------------------------
@@ -766,6 +766,18 @@ class ScheduledRun:
 
 
 @dataclass(frozen=True)
+class ScheduledCycle:
+    """Una singola passata di una zona, collocata nel tempo."""
+
+    zone_id: str
+    zone_name: str
+    cycle: int
+    cycles: int
+    start_min: float
+    end_min: float
+
+
+@dataclass(frozen=True)
 class SequenceSchedule:
     """Piano completo della notte, con diagnosi di capienza."""
 
@@ -775,12 +787,91 @@ class SequenceSchedule:
     fits: bool
     overflow_minutes: float
     dropped: list[str]
+    # la sequenza vera, passata per passata: le zone si alternano
+    cycles: list[ScheduledCycle] = field(default_factory=list)
 
     @property
     def utilization(self) -> float:
         if self.window.duration_min <= 0:
             return 0.0
         return self.total_minutes / self.window.duration_min
+
+
+def interleave_cycles(
+    zone_plans: list[tuple[str, str, RunPlan]],
+    start_min: float,
+    *,
+    gap_minutes: int = 5,
+) -> list[ScheduledCycle]:
+    """Alterna le passate delle zone, riempiendo i tempi di assorbimento.
+
+    Un ciclo non è "irriga e aspetta": è *irriga*, e poi il terreno deve
+    assorbire prima della passata successiva. Tenere la valvola ferma per
+    quella mezz'ora è tempo buttato — nel frattempo può bagnare un'altra
+    linea. Sei linee da 4 passate diventano così tre ore invece di dieci,
+    ed è il motivo per cui i programmatori commerciali seri chiamano
+    questa funzione "cycle & soak" e non "pausa".
+
+    Il criterio è: a ogni passo si sceglie la zona **disponibile prima**;
+    a parità, quella che ha fatto meno passate, e solo da ultimo l'ordine
+    di sequenza. Quel secondo criterio non è un dettaglio: senza, appena
+    l'assorbimento della prima zona è scaduto questa rivince ogni pareggio
+    contro le zone in coda, e l'ultima linea non irriga mai finché le
+    altre non hanno finito. Con molte linee viene naturalmente un giro
+    tondo; con una sola resta l'attesa, che a quel punto è reale.
+
+    L'impianto ha una pressione sola: le zone non si sovrappongono mai.
+    """
+    active = [
+        (zid, name, plan) for zid, name, plan in zone_plans if plan.should_run
+    ]
+    if not active:
+        return []
+
+    remaining = {zid: max(1, plan.cycles) for zid, _n, plan in active}
+    done = {zid: 0 for zid in remaining}
+    # quando ogni zona torna disponibile: subito, la prima volta
+    ready_at = {zid: start_min for zid in remaining}
+    by_id = {zid: (name, plan) for zid, name, plan in active}
+    order = {zid: i for i, (zid, _n, _p) in enumerate(active)}
+
+    cycles: list[ScheduledCycle] = []
+    cursor = start_min
+    first = True
+
+    while any(remaining[zid] > 0 for zid in remaining):
+        candidates = [zid for zid in remaining if remaining[zid] > 0]
+        # il varco fra due zone diverse serve alla pressione, non c'è
+        # prima della primissima passata
+        earliest = cursor if first else cursor + gap_minutes
+
+        def when(zid: str) -> float:
+            return max(earliest, ready_at[zid])
+
+        chosen = min(candidates, key=lambda zid: (when(zid), done[zid], order[zid]))
+        name, plan = by_id[chosen]
+        begin = when(chosen)
+        length = plan.minutes_per_cycle or plan.total_minutes
+        finish = begin + length
+
+        done[chosen] += 1
+        cycles.append(
+            ScheduledCycle(
+                zone_id=chosen,
+                zone_name=name,
+                cycle=done[chosen],
+                cycles=max(1, plan.cycles),
+                start_min=begin,
+                end_min=finish,
+            )
+        )
+
+        remaining[chosen] -= 1
+        ready_at[chosen] = finish + plan.soak_minutes
+        cursor = finish
+        first = False
+
+    return cycles
 
 
 def schedule_sequence(
@@ -803,44 +894,56 @@ def schedule_sequence(
     con l'uso domestico: irrigare alle 9 del mattino mentre qualcuno fa
     la doccia è peggio che saltare una zona.
     """
-    runs: list[ScheduledRun] = []
-    dropped: list[str] = []
-    cursor = window.start_min
-    total = 0.0
-
     active = [(zid, name, p) for zid, name, p in zone_plans if p.should_run]
+    dropped: list[str] = []
 
-    for index, (zone_id, zone_name, plan) in enumerate(active):
-        duration = plan.wall_clock_minutes
-        gap = gap_minutes if index > 0 else 0
-        needed = duration + gap
+    def occupancy(selection: list[tuple[str, str, RunPlan]]) -> tuple[
+        list[ScheduledCycle], float
+    ]:
+        placed = interleave_cycles(
+            selection, window.start_min, gap_minutes=gap_minutes
+        )
+        if not placed:
+            return [], 0.0
+        return placed, max(c.end_min for c in placed) - window.start_min
 
-        if not allow_overflow and (total + needed) > window.duration_min:
-            dropped.append(zone_name)
+    cycles, span = occupancy(active)
+
+    # Troncare significa rinunciare a una zona intera, dall'ultima della
+    # sequenza: si toglie e si ricalcola, perché con le passate alternate
+    # il tempo totale non è la somma dei pezzi — togliere una linea
+    # accorcia anche le attese delle altre.
+    if not allow_overflow:
+        while active and span > window.duration_min:
+            dropped.insert(0, active[-1][1])
+            active = active[:-1]
+            cycles, span = occupancy(active)
+
+    runs: list[ScheduledRun] = []
+    for zone_id, zone_name, plan in active:
+        mine = [c for c in cycles if c.zone_id == zone_id]
+        if not mine:
             continue
-
-        cursor += gap
         runs.append(
             ScheduledRun(
                 zone_id=zone_id,
                 zone_name=zone_name,
-                start_min=cursor,
-                end_min=cursor + round(duration),
+                start_min=round(min(c.start_min for c in mine)),
+                end_min=round(max(c.end_min for c in mine)),
                 plan=plan,
             )
         )
-        cursor += round(duration)
-        total += needed
 
-    overflow = max(0.0, total - window.duration_min)
+    overflow = max(0.0, span - window.duration_min)
 
     return SequenceSchedule(
         runs=runs,
         window=window,
-        total_minutes=round(total, 1),
+        total_minutes=round(span, 1),
         fits=overflow <= 0,
         overflow_minutes=round(overflow, 1),
         dropped=dropped,
+        cycles=cycles,
     )
 
 

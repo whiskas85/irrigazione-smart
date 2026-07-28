@@ -337,6 +337,12 @@ def _flow_payload(hass: HomeAssistant, system: dict[str, Any]) -> dict[str, Any]
     }
 
 
+def _hhmm(minute: float) -> str:
+    """Minuti dalla mezzanotte in 'HH:MM', anche oltre le 24."""
+    m = int(round(minute)) % (24 * 60)
+    return f"{m // 60:02d}:{m % 60:02d}"
+
+
 def _schedule_payload(
     plans: list[tuple[str, str, RunPlan]],
     window: TimeWindow,
@@ -363,10 +369,25 @@ def _schedule_payload(
                 "zone_name": run.zone_name,
                 "start": run.start_hhmm,
                 "end": run.end_hhmm,
-                "minutes": round(run.plan.wall_clock_minutes, 1),
+                # minuti di valvola aperta, non di occupazione: con le
+                # passate alternate le linee si intrecciano, e la somma
+                # delle occupazioni non vorrebbe dire più niente
+                "minutes": round(run.plan.total_minutes, 1),
                 "cycles": run.plan.cycles,
             }
             for run in sched.runs
+        ],
+        # la successione vera, passata per passata
+        "cycles": [
+            {
+                "zone_id": c.zone_id,
+                "zone_name": c.zone_name,
+                "cycle": c.cycle,
+                "cycles": c.cycles,
+                "start": _hhmm(c.start_min),
+                "end": _hhmm(c.end_min),
+            }
+            for c in sched.cycles
         ],
         "total_minutes": sched.total_minutes,
         "window_minutes": window.duration_min,

@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.core import HomeAssistant, callback
@@ -32,7 +33,13 @@ from .const import (
     VALVE_CONFIRM_TIMEOUT,
     zone_category,
 )
-from .hydro import evaluate_zone, resolve_zone_params
+from .hydro import (
+    RunPlan,
+    ZoneParams,
+    evaluate_zone,
+    interleave_cycles,
+    resolve_zone_params,
+)
 from .store import IrrigazioneStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,6 +60,42 @@ class IrrigationAborted(Exception):
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
+
+
+@dataclass
+class _ZoneRun:
+    """Una linea in corso di irrigazione, con quanto le è già arrivato.
+
+    Esiste perché le passate di una linea non sono più consecutive: fra
+    la prima e la seconda ne passano altre, e quello che è stato erogato
+    va tenuto da parte fino alla fine.
+    """
+
+    zone_id: str
+    name: str
+    valve: str
+    params: ZoneParams
+    deficit: float
+    total_minutes: float
+    cycles: int
+    soak_minutes: int
+    forced: bool = False
+
+    applied: float = 0.0
+    minutes_done: float = 0.0
+    confirmed: bool = False
+    started: bool = False
+    failed: bool = False
+    completed: bool = False
+    abort_reason: str | None = None
+    # istante del loop da cui la linea può ricevere la passata successiva
+    ready_at: float | None = None
+    next_zone_id: str | None = None
+    next_name: str | None = None
+
+    @property
+    def per_cycle(self) -> float:
+        return self.total_minutes / self.cycles if self.cycles else self.total_minutes
 
 
 class IrrigationExecutor:
@@ -76,15 +119,21 @@ class IrrigationExecutor:
             return {"active": False}
 
         state = dict(self._state)
-        started = state.get("zone_started_at")
+        started = state.pop("cycle_started_at", None)
+        # Avanzamento contato sui minuti d'acqua, non sull'orologio: con
+        # le passate alternate fra le linee, fra un ciclo e l'altro di una
+        # zona ne passano altre, e una barra a tempo reale segnerebbe il
+        # 100% quando la linea ha ricevuto un quarto dell'acqua.
+        done = float(state.get("zone_done_min") or 0.0)
         if started:
-            elapsed = (dt_util.utcnow() - started).total_seconds() / 60.0
-            state["elapsed_min"] = round(elapsed, 1)
-            total = state.get("zone_total_min") or 0
-            state["progress"] = (
-                round(min(100.0, elapsed / total * 100.0), 1) if total else 0.0
-            )
-            state["zone_started_at"] = started.isoformat()
+            done += (dt_util.utcnow() - started).total_seconds() / 60.0
+            state["cycle_started_at"] = started.isoformat()
+
+        total = state.get("zone_total_min") or 0
+        state["elapsed_min"] = round(min(done, total) if total else done, 1)
+        state["progress"] = (
+            round(min(100.0, done / total * 100.0), 1) if total else 0.0
+        )
         state["active"] = True
         return state
 
@@ -271,8 +320,6 @@ class IrrigationExecutor:
         single: bool = False,
     ) -> None:
         started_at = dt_util.utcnow()
-        completed: list[str] = []
-        failed: list[str] = []
         aborted_reason: str | None = None
 
         self._hass.bus.async_fire(
@@ -284,28 +331,22 @@ class IrrigationExecutor:
             },
         )
 
+        runs = [self._prepare(zone_id, minutes) for zone_id, minutes in queue]
+        runs = [run for run in runs if run is not None]
+        steps = self._interleaved_steps(runs)
+
+        # "prossima linea" nelle notifiche: con le passate alternate non è
+        # più la successiva in elenco, ma quella che finirà dopo di questa
+        finishing = []
+        for run, cycle in steps:
+            if cycle >= run.cycles:
+                finishing.append(run)
+        for current, following in zip(finishing, finishing[1:]):
+            current.next_zone_id = following.zone_id
+            current.next_name = following.name
+
         try:
-            for index, (zone_id, minutes) in enumerate(queue):
-                zone = self._store.zones.get(zone_id)
-                if zone is None:
-                    continue
-
-                nxt = queue[index + 1][0] if index + 1 < len(queue) else None
-                try:
-                    ok = await self._run_zone(zone_id, minutes, next_zone_id=nxt)
-                except IrrigationAborted:
-                    # la linea in corso è stata interrotta: va contata
-                    failed.append(zone_id)
-                    raise
-                (completed if ok else failed).append(zone_id)
-
-                # pausa tra una linea e l'altra, non dopo l'ultima
-                gap = int(self._store.system.get("gap_minutes", 5) or 0)
-                if gap and index + 1 < len(queue):
-                    self._publish(phase="pausa_tra_linee", zone_id=None)
-                    if not await self._pause(gap):
-                        raise IrrigationAborted("master spento durante la pausa")
-
+            await self._execute(steps, runs)
         except IrrigationAborted as aborted:
             # Le linee non ancora raggiunte non sono "fallite": non sono
             # state nemmeno tentate. Restano col loro deficit a bilancio.
@@ -322,8 +363,8 @@ class IrrigationExecutor:
                 {
                     "trigger": trigger,
                     "durata_min": round(duration, 1),
-                    "linee_completate": completed,
-                    "linee_fallite": failed,
+                    "linee_completate": [r.zone_id for r in runs if r.completed],
+                    "linee_fallite": [r.zone_id for r in runs if r.failed],
                     "interrotta": aborted_reason,
                 },
             )
@@ -356,13 +397,17 @@ class IrrigationExecutor:
             },
         )
 
-    async def _run_zone(
-        self, zone_id: str, minutes: float | None, next_zone_id: str | None
-    ) -> bool:
-        """Esegue una linea. Ritorna False se la valvola non ha confermato."""
+    # ------------------------------------------------- passate alternate
+
+    def _prepare(self, zone_id: str, minutes: float | None) -> _ZoneRun | None:
+        """Risolve il piano di una linea prima che la sequenza cominci.
+
+        Si fa tutto adesso perché l'alternanza delle passate va decisa
+        conoscendo cicli e assorbimenti di tutte le linee insieme.
+        """
         zone = self._store.zones.get(zone_id)
         if zone is None:
-            return False
+            return None
 
         system = self._store.system
         params = resolve_zone_params(zone, system)
@@ -370,15 +415,13 @@ class IrrigationExecutor:
 
         # durata: quella forzata dall'utente, o quella calcolata dal motore
         if minutes is None:
-            plan = evaluate_zone(
-                zone, system, deficit, **self._live_guards()
-            )
+            plan = evaluate_zone(zone, system, deficit, **self._live_guards())
             if not plan.should_run:
                 _LOGGER.info("Linea %s saltata: %s", zone.get("name"), plan.reason)
                 self._fire_failed(zone_id, zone, plan.reason)
-                return False
+                return None
             total_minutes = plan.total_minutes
-            cycles = plan.cycles
+            cycles = max(1, plan.cycles)
             soak = plan.soak_minutes
         else:
             total_minutes = float(minutes)
@@ -389,139 +432,226 @@ class IrrigationExecutor:
         if not valve:
             _LOGGER.warning("Linea %s senza entità valvola: saltata", zone.get("name"))
             self._fire_failed(zone_id, zone, "nessuna valvola configurata")
-            return False
+            return None
 
-        per_cycle = total_minutes / cycles if cycles else total_minutes
-        name = zone.get("name")
+        return _ZoneRun(
+            zone_id=zone_id,
+            name=zone.get("name") or "linea",
+            valve=valve,
+            params=params,
+            deficit=deficit,
+            total_minutes=total_minutes,
+            cycles=cycles,
+            soak_minutes=soak,
+            forced=minutes is not None,
+        )
 
+    def _interleaved_steps(self, runs: list[_ZoneRun]) -> list[tuple[_ZoneRun, int]]:
+        """Ordine delle passate, alternando le linee.
+
+        L'ordine lo decide `hydro.interleave_cycles`, lo stesso codice che
+        disegna il programma in pagina: se qui si irrigasse in un ordine
+        diverso, la pagina mostrerebbe una cosa e l'impianto ne farebbe
+        un'altra. Gli orari calcolati lì servono solo a stabilire la
+        successione — i tempi veri li impone l'esecuzione, che può
+        slittare aspettando la conferma di una valvola.
+        """
+        plans = [
+            (
+                run.zone_id,
+                run.name,
+                RunPlan(
+                    should_run=True,
+                    reason="ok",
+                    total_minutes=run.total_minutes,
+                    cycles=run.cycles,
+                    minutes_per_cycle=run.per_cycle,
+                    soak_minutes=run.soak_minutes,
+                ),
+            )
+            for run in runs
+        ]
+        by_id = {run.zone_id: run for run in runs}
+        gap = int(self._store.system.get("gap_minutes", 5) or 0)
+
+        return [
+            (by_id[cycle.zone_id], cycle.cycle)
+            for cycle in interleave_cycles(plans, 0.0, gap_minutes=gap)
+        ]
+
+    async def _execute(
+        self, steps: list[tuple[_ZoneRun, int]], runs: list[_ZoneRun]
+    ) -> None:
+        """Esegue le passate nell'ordine stabilito, una valvola per volta."""
+        gap = int(self._store.system.get("gap_minutes", 5) or 0)
+        loop = self._hass.loop
+        previous: _ZoneRun | None = None
+
+        for run, cycle in steps:
+            # una linea che ha già fallito non riprova le passate rimaste:
+            # se la valvola non ha risposto, non risponderà fra dieci minuti
+            if run.failed:
+                continue
+
+            if previous is not None and gap:
+                self._publish(phase="pausa_tra_linee", zone_id=None)
+                if not await self._pause(gap):
+                    raise IrrigationAborted("master spento durante la pausa")
+
+            # Assorbimento: si aspetta solo quello che manca davvero. Con
+            # molte linee è già trascorso mentre irrigavano le altre, ed è
+            # tutto il punto dell'alternanza.
+            if run.ready_at is not None:
+                left = (run.ready_at - loop.time()) / 60.0
+                if left > 0:
+                    self._publish(phase="assorbimento", zone_id=run.zone_id)
+                    if not await self._pause(left):
+                        raise IrrigationAborted(
+                            "master spento durante l'assorbimento"
+                        )
+
+            if not run.started:
+                run.started = True
+                self._fire_zone_started(run)
+
+            ok = await self._run_cycle(run, cycle)
+            previous = run
+
+            if not ok:
+                run.failed = True
+                self._finalize(run, interrupted=True)
+                if run.abort_reason:
+                    raise IrrigationAborted(run.abort_reason)
+                continue
+
+            run.ready_at = loop.time() + run.soak_minutes * 60.0
+            if cycle >= run.cycles:
+                run.completed = True
+                self._finalize(run)
+
+    def _fire_zone_started(self, run: _ZoneRun) -> None:
         self._hass.bus.async_fire(
             EVENT_ZONE_STARTED,
             {
-                "zone_id": zone_id,
-                "nome": name,
-                "minuti": round(total_minutes, 1),
-                "cicli": cycles,
-                "pausa_min": soak,
-                "valvola": valve,
-                "deficit_mm": round(deficit, 2),
-                "portata_mm_h": params.rate_mm_h,
+                "zone_id": run.zone_id,
+                "nome": run.name,
+                "minuti": round(run.total_minutes, 1),
+                "cicli": run.cycles,
+                "pausa_min": run.soak_minutes,
+                "valvola": run.valve,
+                "deficit_mm": round(run.deficit, 2),
+                "portata_mm_h": run.params.rate_mm_h,
                 "flusso": self._flow_value(),
             },
         )
 
-        applied = 0.0
-        confirmed_any = False
+    async def _run_cycle(self, run: _ZoneRun, cycle: int) -> bool:
+        """Una singola passata: apri, sorveglia, chiudi.
+
+        Ritorna False se la valvola non ha confermato o è stata chiusa da
+        fuori. In quel caso `run.abort_reason` dice se va fermata tutta la
+        sequenza — spegnere il master ferma tutto, non solo questa linea.
+        """
+        self._publish(
+            zone_id=run.zone_id,
+            zone_name=run.name,
+            phase="irrigazione",
+            cycle=cycle,
+            cycles=run.cycles,
+            zone_total_min=run.total_minutes,
+            zone_done_min=round(run.per_cycle * (cycle - 1), 2),
+            cycle_started_at=dt_util.utcnow(),
+        )
 
         try:
-            for cycle in range(1, cycles + 1):
-                self._publish(
-                    zone_id=zone_id,
-                    zone_name=name,
-                    phase="irrigazione",
-                    cycle=cycle,
-                    cycles=cycles,
-                    zone_total_min=total_minutes,
-                    # l'inizio si fissa al primo ciclo: la barra di
-                    # progresso deve misurare l'intera linea, non il ciclo
-                    zone_started_at=(
-                        dt_util.utcnow()
-                        if cycle == 1
-                        else self._state.get("zone_started_at")
-                    ),
+            if not await self._open_confirmed(run.valve):
+                _LOGGER.error(
+                    "La valvola %s della linea %s non ha confermato "
+                    "l'apertura: linea saltata",
+                    run.valve,
+                    run.name,
                 )
+                await self._close(run.valve)
+                self._fire_failed(
+                    run.zone_id,
+                    self._store.zones.get(run.zone_id) or {},
+                    f"la valvola {run.valve} non ha confermato l'apertura",
+                )
+                return False
 
-                if not await self._open_confirmed(valve):
-                    # La valvola non ha confermato: non si finge che stia
-                    # irrigando. Si chiude, si registra e si passa oltre.
-                    _LOGGER.error(
-                        "La valvola %s della linea %s non ha confermato "
-                        "l'apertura: linea saltata",
-                        valve,
-                        name,
-                    )
-                    await self._close(valve)
-                    self._fire_failed(
-                        zone_id,
-                        zone,
-                        f"la valvola {valve} non ha confermato l'apertura",
-                    )
-                    return False
+            run.confirmed = True
+            began = dt_util.utcnow()
+            outcome = await self._irrigate_for(run.valve, run.per_cycle)
+            elapsed = (dt_util.utcnow() - began).total_seconds() / 60.0
+            run.applied += run.params.applied_mm(min(elapsed, run.per_cycle))
+            run.minutes_done += min(elapsed, run.per_cycle)
+            await self._close(run.valve)
 
-                confirmed_any = True
-                cycle_start = dt_util.utcnow()
-                outcome = await self._irrigate_for(valve, per_cycle)
-
-                # si conta solo l'acqua effettivamente erogata, anche se
-                # l'irrigazione è stata interrotta a metà
-                elapsed = (dt_util.utcnow() - cycle_start).total_seconds() / 60.0
-                applied += params.applied_mm(min(elapsed, per_cycle))
-                await self._close(valve)
-
-                if outcome != "completato":
-                    motivo = (
-                        "master spento durante l'irrigazione"
-                        if outcome == "master_spento"
-                        else f"la valvola {valve} è stata chiusa dall'esterno"
-                    )
-                    _LOGGER.warning("Linea %s interrotta: %s", name, motivo)
-                    self._store.async_set_deficit(
-                        zone_id, max(0.0, deficit - applied)
-                    )
-                    self._store.async_set_runtime(
-                        zone_id,
-                        last_irrigation=dt_util.now().isoformat(),
-                        last_duration_min=round(min(elapsed, per_cycle), 1),
-                        last_trigger="interrotta",
-                    )
-                    self._fire_failed(zone_id, zone, motivo)
-                    # spegnere il master significa fermare tutto, non solo
-                    # la linea in corso
-                    if outcome == "master_spento":
-                        raise IrrigationAborted(motivo)
-                    return False
-
-                if cycle < cycles and soak:
-                    self._publish(phase="assorbimento")
-                    await asyncio.sleep(soak * 60)
+            if outcome != "completato":
+                motivo = (
+                    "master spento durante l'irrigazione"
+                    if outcome == "master_spento"
+                    else f"la valvola {run.valve} è stata chiusa dall'esterno"
+                )
+                _LOGGER.warning("Linea %s interrotta: %s", run.name, motivo)
+                self._fire_failed(
+                    run.zone_id, self._store.zones.get(run.zone_id) or {}, motivo
+                )
+                if outcome == "master_spento":
+                    run.abort_reason = motivo
+                return False
 
         except asyncio.CancelledError:
-            await self._close(valve)
+            await self._close(run.valve)
             # l'acqua già erogata va comunque scalata dal deficit
-            self._store.async_set_deficit(zone_id, max(0.0, deficit - applied))
+            self._store.async_set_deficit(
+                run.zone_id, max(0.0, run.deficit - run.applied)
+            )
             raise
-        finally:
-            await self._close(valve)
 
-        new_deficit = max(0.0, deficit - applied)
-        self._store.async_set_deficit(zone_id, new_deficit)
+        return True
+
+    def _finalize(self, run: _ZoneRun, interrupted: bool = False) -> None:
+        """Chiude i conti di una linea: deficit, storico, evento.
+
+        Si scrive solo l'acqua **davvero** erogata: una linea interrotta a
+        metà lascia il resto a bilancio e lo recupera il giorno dopo.
+        """
+        new_deficit = max(0.0, run.deficit - run.applied)
+        self._store.async_set_deficit(run.zone_id, new_deficit)
         self._store.async_set_runtime(
-            zone_id,
+            run.zone_id,
             last_irrigation=dt_util.now().isoformat(),
-            last_duration_min=round(total_minutes, 1),
-            last_trigger="forzata" if minutes is not None else "automatica",
+            last_duration_min=round(run.minutes_done, 1),
+            last_trigger=(
+                "interrotta"
+                if interrupted
+                else ("forzata" if run.forced else "automatica")
+            ),
         )
+
+        if interrupted:
+            return
+
+        zone = self._store.zones.get(run.zone_id) or {}
         # minuti della giornata, per il grafico dell'irrigazione nel tempo
         self._store.async_add_irrigation(
-            zone_category(zone.get("zone_type")), round(total_minutes, 1)
+            zone_category(zone.get("zone_type")), round(run.minutes_done, 1)
         )
-
-        next_zone = self._store.zones.get(next_zone_id) if next_zone_id else None
         self._hass.bus.async_fire(
             EVENT_ZONE_FINISHED,
             {
-                "zone_id": zone_id,
-                "nome": name,
-                "minuti": round(total_minutes, 1),
-                "acqua_mm": round(applied, 2),
+                "zone_id": run.zone_id,
+                "nome": run.name,
+                "minuti": round(run.minutes_done, 1),
+                "acqua_mm": round(run.applied, 2),
                 "deficit_residuo_mm": round(new_deficit, 2),
-                "confermata": confirmed_any,
+                "confermata": run.confirmed,
                 "flusso": self._flow_value(),
-                "prossima_zone_id": next_zone_id,
-                "prossima_nome": next_zone.get("name") if next_zone else None,
+                "prossima_zone_id": run.next_zone_id,
+                "prossima_nome": run.next_name,
             },
         )
-        return True
-
 
 def get_executor(hass: HomeAssistant) -> IrrigationExecutor | None:
     return hass.data.get(DOMAIN, {}).get("executor")
