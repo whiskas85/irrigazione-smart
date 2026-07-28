@@ -57,7 +57,7 @@ devo poter essere ingrado di :
 2) devi inserire la lista di giorni. Linedi, martedi, ecc di degault sono attivi (checkbox di home assistant). se li disattivo quel giorno il sistema di irrigazione non può entrare in funzione.
 
 
-# Aggiungere Tab Dashboard image:   [fatto in 1.0.0, tranne il punto 7]
+# Aggiungere Tab Dashboard image:   [fatto — 1.0.0 la mappa, 1.1.0 le card a lato]
 vorrei avere la possibilità in una tab apposita caricando un immagine di:
 1) mostrarla   [fatto]
 2) in overlay a quest'immagine vorrei avere la possibilità di creare delle aree (polyline) di configurare il colore ed un icona da mettere al centro (l'icona anche essa ha un colore) l'icona ha una possibilie entità.   [fatto — il colore configurabile è quello del bordo: il riempimento lo detta il deficit, vedi punto 6]
@@ -65,7 +65,7 @@ vorrei avere la possibilità in una tab apposita caricando un immagine di:
 4) le poliline ed icone devono poter essere modificatre successiubamente   [fatto]
 5) se clicco sull'icona mi forza l'irrigazione della linea   [fatto — vale anche il tocco sull'area]
 6) il colore di sfondo della poliline (che comunque preseterà una trapsarenza) deve cambiare colore a seconda del deficit di acqua (trasparente: tutto ok, giallo: deficit, rosso: carenza forte, azzurro blinking con fade in fade out: la zona è sotto irrigazione)   [fatto]
-7) a lato della dashboard vorrei avere la possibilità di inserire delle card in stile lovelace (se possibile) perchè vorrei poterci inserire la card meteo delle card markdown per avere un resoconto di quello che farà l'irrigazione, precipitazioni nei prossimi giorni e vento   [DA FARE — prossima release. Fattibile: si passa da window.loadCardHelpers(), già usato dal pannello per i selettori]
+7) a lato della dashboard vorrei avere la possibilità di inserire delle card in stile lovelace (se possibile) perchè vorrei poterci inserire la card meteo delle card markdown per avere un resoconto di quello che farà l'irrigazione, precipitazioni nei prossimi giorni e vento   [fatto in 1.1.0 — card vere di Home Assistant, costruite con loadCardHelpers(): funziona qualunque card, comprese quelle da HACS]
 8) una  toolbox sopra che mi permette di attivare l'irrigazione di tutte le aree.   [fatto]
 
 PEr intenderci vorrei ricreare questo tipo di schermata che trovi con MCP di home assistant:

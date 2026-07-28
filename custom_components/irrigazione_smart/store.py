@@ -184,6 +184,12 @@ DEFAULT_MAP: dict[str, Any] = {
     # restare leggibile
     "fill_opacity": 0.35,
     "areas": {},
+    # Card Lovelace mostrate accanto alla mappa. Si conservano come
+    # configurazioni grezze e non si interpretano: le disegna il
+    # frontend di Home Assistant con le sue, quindi qualunque card —
+    # meteo, markdown, o una installata da HACS — funziona senza che
+    # questa integration ne sappia niente.
+    "cards": [],
 }
 
 # Un'area è un poligono sopra l'immagine, di norma legato a una linea.
@@ -557,6 +563,14 @@ class IrrigazioneStore:
             if key == "areas" or key not in payload:
                 continue
             current[key] = payload[key]
+
+        # Le card non si interpretano, ma devono almeno essere una lista
+        # di configurazioni: un valore storto qui farebbe fallire il
+        # disegno dell'intera colonna.
+        if "cards" in payload:
+            current["cards"] = [
+                card for card in (payload["cards"] or []) if isinstance(card, dict)
+            ]
 
         # Immagine caricata e indirizzo manuale si escludono: tenerli
         # entrambi renderebbe ambiguo quale delle due si vede.

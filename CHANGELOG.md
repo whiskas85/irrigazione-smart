@@ -8,6 +8,21 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Aggiunto
+- **Card di Home Assistant accanto alla mappa.** La previsione meteo, una
+  markdown col riassunto di quello che farà l'irrigazione, vento e
+  pioggia dei prossimi giorni: si aggiungono dalla scheda Mappa, in
+  modifica, scrivendo la stessa configurazione YAML che si userebbe in
+  una dashboard. Non le disegna questo pannello — le costruisce il
+  frontend di Home Assistant, quindi funziona qualunque card, comprese
+  quelle installate da HACS. Una card scritta male diventa un avviso al
+  posto suo e non porta via le altre
+- **La mappa occupa tutta la larghezza della pagina.** Restava stretta
+  nei 780 pixel buoni per una lista, che su una planimetria vuol dire
+  non distinguere le aree. Ora la scheda Mappa si allarga e le card
+  stanno a fianco; sotto i 1000 pixel la colonna scende sotto la mappa
+  invece di stringerla a un francobollo
+
 ## [1.0.1] - 2026-07-28
 
 ### Aggiunto

@@ -544,6 +544,21 @@ arbitrario con un percorso costruito ad arte.
 Il primo tocco su un'area seleziona e basta: trascinare per sbaglio
 un'area appena scelta è il modo più facile di rovinare un disegno.
 
+Un'area senza nome proprio prende quello della linea collegata, come già
+fa con l'icona: chiamare "Area 3" il pezzo di prato che si chiama "Prato
+Sud" costringerebbe a tenere allineati a mano due nomi per la stessa cosa.
+
+**Le card a fianco non le disegna questo pannello.** Le costruisce il
+frontend di Home Assistant con `loadCardHelpers()`, lo stesso meccanismo
+delle dashboard: funziona quindi qualunque card, comprese quelle
+installate da HACS, e l'integration non deve sapere niente di nessuna di
+esse — conserva configurazioni grezze e non le interpreta. La colonna sta
+**fuori** da ciò che `_repaintMap` sostituisce, e si ricostruisce solo
+quando la sua firma cambia: una card ha uno stato suo — un grafico a metà
+animazione, una previsione appena caricata — che non va buttato via a
+ogni movimento del dito su un vertice. Una card scritta male diventa un
+avviso al posto suo, senza portarsi dietro le altre.
+
 I salvataggi avvengono a **trascinamento finito**, non a ogni movimento:
 una chiamata al server per ogni pixel percorso intaserebbe la rete e la
 scheda SD. Durante il gesto si ridisegnano i soli poligoni e maniglie

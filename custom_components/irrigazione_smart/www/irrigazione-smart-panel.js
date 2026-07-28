@@ -203,6 +203,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
     this._selVertex = null;
     this._draft = null;
     this._mapDragging = false;
+    this._cardEls = [];
   }
 
   /* True mentre si sta disegnando o trascinando sulla mappa.
@@ -224,6 +225,10 @@ class IrrigazioneSmartPanel extends HTMLElement {
     }
     this._updateLiveValues();
     this._updateMenuButton();
+    // le card Lovelace si aggiornano da sole, ma solo se ricevono `hass`
+    (this._cardEls || []).forEach((card) => {
+      card.hass = hass;
+    });
   }
 
   set narrow(value) {
@@ -474,7 +479,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
             )
             .join("")}
         </div>
-        <div class="content">${this._body()}</div>
+        <div class="content${this._tab === "mappa" ? " wide" : ""}">${this._body()}</div>
       </ha-top-app-bar-fixed>
     `;
     this._updateMenuButton();
@@ -490,7 +495,10 @@ class IrrigazioneSmartPanel extends HTMLElement {
       this._tab = e.currentTarget.getAttribute("data-tab");
       this._render();
     });
-    if (this._tab === "mappa") this._bindMap();
+    if (this._tab === "mappa") {
+      this._bindMap();
+      this._renderCards();
+    }
     onClick(".add-zone", () => this._openZoneDialog(null));
     onClick(".edit-zone", (e) =>
       this._openZoneDialog(e.currentTarget.getAttribute("data-id"))
@@ -1995,8 +2003,20 @@ class IrrigazioneSmartPanel extends HTMLElement {
     return this._centroid(area.points || []);
   }
 
+  /* La colonna delle card sta fuori da ciò che viene ridisegnato.
+
+     Le card Lovelace sono elementi veri, costruiti da Home Assistant e
+     con uno stato loro (un grafico a metà animazione, una previsione
+     appena caricata): ricrearle a ogni movimento del dito su un vertice
+     sarebbe uno spreco e le farebbe sfarfallare. `_repaintMap` tocca
+     quindi solo la colonna di sinistra. */
   _mapTab() {
-    return `<div class="map-tab">${this._mapTabInner()}</div>`;
+    return `<div class="map-tab">
+      <div class="map-grid">
+        <div class="map-main">${this._mapTabInner()}</div>
+        <div class="map-side"></div>
+      </div>
+    </div>`;
   }
 
   _mapTabInner() {
@@ -2245,13 +2265,14 @@ class IrrigazioneSmartPanel extends HTMLElement {
   // ------------------------------------------------------ mappa: comandi
 
   _repaintMap() {
-    const tab = this.shadowRoot.querySelector(".map-tab");
-    if (!tab) {
+    const main = this.shadowRoot.querySelector(".map-main");
+    if (!main) {
       this._render();
       return;
     }
-    tab.innerHTML = this._mapTabInner();
+    main.innerHTML = this._mapTabInner();
     this._bindMap();
+    this._renderCards();
   }
 
   /* Ridisegna i soli poligoni e maniglie.
@@ -2283,6 +2304,211 @@ class IrrigazioneSmartPanel extends HTMLElement {
       clamp((ev.clientX - box.left) / (box.width || 1)),
       clamp((ev.clientY - box.top) / (box.height || 1)),
     ];
+  }
+
+  /* ------------------------------------------------------ card Lovelace
+
+     Accanto alla mappa si possono mettere card di Home Assistant: la
+     previsione, una markdown col riassunto, quello che serve. Non le
+     disegna questo pannello — le costruisce il frontend con
+     `loadCardHelpers()`, lo stesso meccanismo delle dashboard. Vuol dire
+     che funziona qualunque card, comprese quelle installate da HACS, e
+     che questa integration non deve sapere niente di nessuna di esse. */
+
+  async _renderCards() {
+    const side = this.shadowRoot.querySelector(".map-side");
+    if (!side) return;
+
+    const configs = this._mapData().map.cards || [];
+    const edit = !!this._mapEdit;
+
+    // Firma della colonna: si ricostruisce solo se è cambiato qualcosa.
+    // Senza, ogni giro di aggiornamento butterebbe via card vive — un
+    // grafico a metà animazione, una previsione appena caricata.
+    const key = JSON.stringify([configs, edit]);
+    if (side._key === key && side.childElementCount) return;
+    side._key = key;
+
+    side.innerHTML = "";
+    this._cardEls = [];
+
+    if (edit) side.appendChild(this._cardsEditor(configs));
+
+    if (!configs.length) {
+      if (!edit) {
+        const hint = document.createElement("ha-card");
+        hint.innerHTML = `<div class="inner"><div class="empty-state">
+          <ha-icon icon="mdi:view-dashboard-outline"></ha-icon>
+          <p>Nessuna card. Da <b>Modifica</b> puoi affiancare alla mappa
+             la previsione meteo, una markdown, quello che ti serve.</p>
+        </div></div>`;
+        side.appendChild(hint);
+      }
+      return;
+    }
+
+    let helpers = null;
+    try {
+      helpers = window.loadCardHelpers ? await window.loadCardHelpers() : null;
+    } catch (_e) {
+      helpers = null;
+    }
+    if (!helpers) {
+      const alert = document.createElement("ha-alert");
+      alert.setAttribute("alert-type", "warning");
+      alert.textContent =
+        "Le card di Home Assistant non sono disponibili in questa pagina.";
+      side.appendChild(alert);
+      return;
+    }
+
+    for (const config of configs) {
+      let card;
+      try {
+        card = await helpers.createCardElement(config);
+        card.hass = this._hass;
+      } catch (err) {
+        // una card scritta male non deve portarsi dietro le altre
+        card = document.createElement("ha-alert");
+        card.setAttribute("alert-type", "error");
+        card.textContent = `Card "${(config && config.type) || "?"}" non valida: ${
+          (err && err.message) || err
+        }`;
+      }
+      side.appendChild(card);
+      this._cardEls.push(card);
+    }
+  }
+
+  /* Elenco delle card, con l'ordine in cui compaiono. */
+  _cardsEditor(configs) {
+    const card = document.createElement("ha-card");
+    const rows = configs
+      .map(
+        (config, index) => `<div class="row">
+          <ha-icon icon="mdi:card-outline"></ha-icon>
+          <div class="row-main">
+            <span class="row-label">${esc(config.type || "card")}</span>
+            <span class="sub">${esc(
+              config.entity || config.title || `posizione ${index + 1}`
+            )}</span>
+          </div>
+          <ha-icon-button class="card-up" data-i="${index}" label="Su">
+            <ha-icon icon="mdi:arrow-up"></ha-icon>
+          </ha-icon-button>
+          <ha-icon-button class="card-down" data-i="${index}" label="Giù">
+            <ha-icon icon="mdi:arrow-down"></ha-icon>
+          </ha-icon-button>
+          <ha-icon-button class="card-edit" data-i="${index}" label="Modifica">
+            <ha-icon icon="mdi:pencil"></ha-icon>
+          </ha-icon-button>
+          <ha-icon-button class="card-del" data-i="${index}" label="Elimina">
+            <ha-icon icon="mdi:delete"></ha-icon>
+          </ha-icon-button>
+        </div>`
+      )
+      .join("");
+
+    card.innerHTML = `<div class="inner">
+      <div class="card-head">
+        <ha-icon icon="mdi:view-dashboard-outline"></ha-icon><h2>Card</h2>
+        <span class="spacer"></span>
+        ${this._button("card-add", "Aggiungi", { primary: true })}
+      </div>
+      ${rows || `<p class="muted small nomargin">Nessuna card accanto alla mappa.</p>`}
+    </div>`;
+
+    const on = (sel, fn) =>
+      card.querySelectorAll(sel).forEach((el) => el.addEventListener("click", fn));
+    const at = (e) => Number(e.currentTarget.getAttribute("data-i"));
+
+    on(".card-add", () => this._openCardDialog(null));
+    on(".card-edit", (e) => this._openCardDialog(at(e)));
+    on(".card-del", (e) => this._saveCards(configs.filter((_c, i) => i !== at(e))));
+    on(".card-up", (e) => this._moveCard(at(e), -1));
+    on(".card-down", (e) => this._moveCard(at(e), 1));
+    return card;
+  }
+
+  _moveCard(index, direction) {
+    const cards = [...(this._mapData().map.cards || [])];
+    const target = index + direction;
+    if (target < 0 || target >= cards.length) return;
+    [cards[index], cards[target]] = [cards[target], cards[index]];
+    this._saveCards(cards);
+  }
+
+  async _saveCards(cards) {
+    await this._mutate("POST", "map", { cards });
+  }
+
+  /* La configurazione si scrive in YAML, come in una dashboard: è il
+     formato in cui la si trova scritta ovunque, e da cui la si copia. */
+  _openCardDialog(index) {
+    const cards = [...(this._mapData().map.cards || [])];
+    const current = index == null ? null : cards[index];
+    const yamlReady = has("ha-yaml-editor");
+
+    const dlg = this._makeDialog(current ? "Modifica card" : "Aggiungi card");
+    const wrap = document.createElement("div");
+    wrap.className = "form";
+
+    const hint = document.createElement("p");
+    hint.className = "muted small nomargin";
+    hint.textContent = yamlReady
+      ? "La stessa configurazione che scriveresti in una dashboard."
+      : "Editor YAML non disponibile: scrivi la configurazione in JSON.";
+    wrap.appendChild(hint);
+
+    const starter = current || { type: "weather-forecast", show_forecast: true };
+    let value = starter;
+    let editor;
+
+    if (yamlReady) {
+      editor = document.createElement("ha-yaml-editor");
+      editor.defaultValue = starter;
+      editor.addEventListener("value-changed", (ev) => {
+        ev.stopPropagation();
+        if (ev.detail.isValid !== false) value = ev.detail.value;
+      });
+    } else {
+      editor = document.createElement("textarea");
+      editor.className = "ha-control card-json";
+      editor.rows = 12;
+      editor.value = JSON.stringify(starter, null, 2);
+      editor.addEventListener("input", () => {
+        try {
+          value = JSON.parse(editor.value);
+        } catch (_e) {
+          /* la validità si controlla al salvataggio */
+        }
+      });
+    }
+    wrap.appendChild(editor);
+    dlg.appendChild(wrap);
+
+    const close = () => dlg.remove();
+    dlg.appendChild(
+      this._actionBar(
+        "Salva",
+        async () => {
+          if (!value || typeof value !== "object" || Array.isArray(value)) {
+            close();
+            this._error = "La configurazione della card non è valida.";
+            this._render();
+            return;
+          }
+          if (index == null) cards.push(value);
+          else cards[index] = value;
+          close();
+          await this._saveCards(cards);
+        },
+        close
+      )
+    );
+
+    this.shadowRoot.appendChild(dlg);
+    this._layoutFallback(dlg);
   }
 
   _bindMap() {
@@ -3830,6 +4056,20 @@ class IrrigazioneSmartPanel extends HTMLElement {
          la larghezza e detta l'altezza, SVG e maniglie si sovrappongono al
          100%. Così le coordinate normalizzate combaciano senza calcoli, e
          il disegno viene deformato esattamente come l'immagine. */
+      /* La planimetria è il contenuto: prende tutta la larghezza che
+         c'è, e le card le stanno a fianco. Sotto i 1000px la colonna
+         scende sotto la mappa invece di stringerla a un francobollo. */
+      .content.wide { max-width: 1800px; }
+      .map-grid { display: grid; gap: 16px; align-items: start;
+                  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); }
+      @media (max-width: 1000px) {
+        .map-grid { grid-template-columns: minmax(0, 1fr); }
+      }
+      .map-side { min-width: 0; }
+      .map-side > * { margin-bottom: 16px; display: block; }
+      .card-json { width: 100%; min-height: 240px; font-family: ui-monospace,
+                   SFMono-Regular, Menlo, monospace; font-size: 13px; resize: vertical; }
+
       .map-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
                      margin-bottom: 12px; }
       .map-card { overflow: hidden; }
