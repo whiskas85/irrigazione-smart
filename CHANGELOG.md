@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-07-28
+
 ### Corretto
 - **Le tendine non funzionavano di nuovo.** I menu a tendina del frontend
   si sono rotti due volte in installazioni reali, per motivi diversi. Ora
