@@ -8,6 +8,23 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Corretto
+- **I giorni della settimana sembravano ignorare il clic.** Il giorno si
+  accendeva solo dopo la risposta del server e il ridisegno della pagina:
+  nel frattempo non succedeva nulla, veniva naturale cliccare di nuovo e
+  il secondo clic annullava il primo. Ora il giorno si accende
+  **immediatamente** e il salvataggio avviene dietro le quinte; se
+  fallisce, torna indietro da solo
+- Stesso trattamento per tutti gli interruttori (master generale, gruppo,
+  avvio automatico, linee, notifiche e azioni): scattano subito, senza
+  attendere il server
+- La pagina non si ridisegna più a ogni comando, ma si riallinea poco dopo
+  che si è smesso di toccare: niente sfarfallio durante una serie di clic
+
+### Modificato
+- Le GitHub Action passano alle versioni su Node 24 (`checkout@v5`,
+  `setup-python@v6`): GitHub segnalava Node 20 come deprecato
+
 ## [0.7.1] - 2026-07-28
 
 ### Corretto

@@ -191,6 +191,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
 
   disconnectedCallback() {
     clearTimeout(this._timer);
+    clearTimeout(this._softTimer);
   }
 
   _schedulePoll() {
@@ -293,6 +294,37 @@ class IrrigazioneSmartPanel extends HTMLElement {
     } finally {
       this._render();
     }
+  }
+
+  /* Salvataggio senza ridisegnare subito.
+
+     Per i comandi che hanno già dato riscontro sullo schermo — un
+     interruttore che scatta, un giorno che si accende — ridisegnare
+     appena arriva la risposta fa sfarfallare la pagina e, peggio, fa
+     sembrare il comando lento: si finisce per cliccare due volte. Lo
+     stato viene aggiornato subito in locale, e la pagina si riallinea
+     poco dopo, quando l'utente ha smesso di toccare. */
+  async _mutateQuiet(method, path, body, revert) {
+    try {
+      const res = await this._api(method, path, body);
+      if (res && res.overview) this._overview = res.overview;
+      this._error = null;
+      this._softRender();
+    } catch (err) {
+      this._error = (err && err.message) || String(err);
+      if (revert) revert();
+      this._render();
+    }
+  }
+
+  /* Ridisegno differito: se arrivano altri clic, si rimanda ancora. */
+  _softRender() {
+    clearTimeout(this._softTimer);
+    this._softTimer = setTimeout(() => {
+      if (this._isTyping()) return;
+      if (this.shadowRoot.querySelector("ha-dialog, .dlg-fallback")) return;
+      this._render();
+    }, 700);
   }
 
   // -------------------------------------------------------------- utils
@@ -416,29 +448,41 @@ class IrrigazioneSmartPanel extends HTMLElement {
       const el = e.currentTarget;
       const cat = el.getAttribute("data-cat");
       const day = el.getAttribute("data-day");
-      const group = (this._overview.groups || {})[cat] || {};
+      const group = (this._overview.groups || {})[cat];
+      if (!group) return;
+
+      // il giorno si accende subito: aspettare la risposta del server
+      // faceva sembrare il comando ignorato
+      const acceso = el.classList.toggle("on");
+
       const days = new Set(group.days || []);
-      if (days.has(day)) days.delete(day);
-      else days.add(day);
+      if (acceso) days.add(day);
+      else days.delete(day);
       // si mantiene l'ordine della settimana, non quello dei clic
       const ordered = DAY_ORDER.filter((d) => days.has(d));
-      this._mutate("POST", `groups/${cat}`, { days: ordered });
+      group.days = ordered;
+
+      this._mutateQuiet("POST", `groups/${cat}`, { days: ordered }, () => {
+        el.classList.toggle("on", !acceso);
+        group.days = (group.days || []).filter((d) => d !== day);
+      });
     });
 
-    sr.querySelectorAll("[data-group-toggle]").forEach((el) => {
-      el.addEventListener("change", (e) =>
-        this._mutate("POST", `groups/${el.getAttribute("data-group-toggle")}`, {
-          enabled: !!e.target.checked,
-        })
-      );
-    });
-    sr.querySelectorAll("[data-group-auto]").forEach((el) => {
-      el.addEventListener("change", (e) =>
-        this._mutate("POST", `groups/${el.getAttribute("data-group-auto")}`, {
-          auto: !!e.target.checked,
-        })
-      );
-    });
+    // Gli interruttori scattano da soli: si evita di ridisegnare subito,
+    // altrimenti la pagina sfarfalla e il comando sembra lento.
+    const bindToggle = (attr, field, pathFor) =>
+      sr.querySelectorAll(`[${attr}]`).forEach((el) => {
+        el.addEventListener("change", (e) => {
+          const value = !!e.target.checked;
+          const key = el.getAttribute(attr);
+          this._mutateQuiet("POST", pathFor(key), { [field]: value }, () => {
+            e.target.checked = !value;
+          });
+        });
+      });
+
+    bindToggle("data-group-toggle", "enabled", (k) => `groups/${k}`);
+    bindToggle("data-group-auto", "auto", (k) => `groups/${k}`);
     onClick(".stop-all", () => this._mutate("POST", "stop", {}));
     onClick(".run-zone", (e) =>
       this._openForceDialog(e.currentTarget.getAttribute("data-id"))
@@ -481,20 +525,30 @@ class IrrigazioneSmartPanel extends HTMLElement {
 
     // master di notifiche e azioni
     sr.querySelectorAll("[data-flag]").forEach((el) => {
-      el.addEventListener("change", (e) =>
-        this._mutate("POST", "system", {
-          [el.getAttribute("data-flag")]: !!e.target.checked,
-        })
-      );
+      el.addEventListener("change", (e) => {
+        const value = !!e.target.checked;
+        this._mutateQuiet(
+          "POST",
+          "system",
+          { [el.getAttribute("data-flag")]: value },
+          () => {
+            e.target.checked = !value;
+          }
+        );
+      });
     });
     sr.querySelectorAll("[data-item-toggle]").forEach((el) => {
-      el.addEventListener("change", (e) =>
-        this._mutate(
+      el.addEventListener("change", (e) => {
+        const value = !!e.target.checked;
+        this._mutateQuiet(
           "POST",
           `items/${el.getAttribute("data-kind")}/${el.getAttribute("data-item-toggle")}`,
-          { enabled: !!e.target.checked }
-        )
-      );
+          { enabled: value },
+          () => {
+            e.target.checked = !value;
+          }
+        );
+      });
     });
 
     // Ricerca nel registro. Si aggiorna solo l'elenco: ridisegnare tutta
@@ -537,17 +591,26 @@ class IrrigazioneSmartPanel extends HTMLElement {
     // master generale
     const master = sr.querySelector("[data-master]");
     if (master) {
-      master.addEventListener("change", (e) =>
-        this._mutate("POST", "system", { master_enabled: !!e.target.checked })
-      );
+      master.addEventListener("change", (e) => {
+        const value = !!e.target.checked;
+        this._mutateQuiet("POST", "system", { master_enabled: value }, () => {
+          e.target.checked = !value;
+        });
+      });
     }
     // master di ogni linea
     sr.querySelectorAll("[data-zone-toggle]").forEach((el) => {
-      el.addEventListener("change", (e) =>
-        this._mutate("POST", `zones/${el.getAttribute("data-zone-toggle")}`, {
-          enabled: !!e.target.checked,
-        })
-      );
+      el.addEventListener("change", (e) => {
+        const value = !!e.target.checked;
+        this._mutateQuiet(
+          "POST",
+          `zones/${el.getAttribute("data-zone-toggle")}`,
+          { enabled: value },
+          () => {
+            e.target.checked = !value;
+          }
+        );
+      });
     });
   }
 
