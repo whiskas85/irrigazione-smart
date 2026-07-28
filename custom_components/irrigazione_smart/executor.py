@@ -30,6 +30,7 @@ from .const import (
     EVENT_ZONE_STARTED,
     SIGNAL_STATE_CHANGED,
     VALVE_CONFIRM_TIMEOUT,
+    zone_category,
 )
 from .hydro import evaluate_zone, resolve_zone_params
 from .store import IrrigazioneStore
@@ -201,8 +202,14 @@ class IrrigationExecutor:
             self._run([(zone_id, minutes)], trigger=trigger, single=True)
         )
 
-    async def async_start_sequence(self, trigger: str = "manuale") -> None:
-        """Irriga tutte le linee che lo richiedono, in ordine."""
+    async def async_start_sequence(
+        self, trigger: str = "manuale", category: str | None = None
+    ) -> None:
+        """Irriga le linee che lo richiedono, in ordine.
+
+        Con `category` si irriga un solo gruppo — il prato senza le aiuole,
+        per esempio, che hanno irrigatori e tempi diversi.
+        """
         if self.running:
             _LOGGER.warning("Irrigazione già in corso: comando ignorato")
             return
@@ -210,14 +217,17 @@ class IrrigationExecutor:
         system = self._store.system
         queue: list[tuple[str, float | None]] = []
         for zone in self._store.zones_sorted():
-            plan = evaluate_zone(
-                zone, system, float(zone.get("deficit_mm") or 0.0)
-            )
+            if category and zone_category(zone.get("zone_type")) != category:
+                continue
+            plan = evaluate_zone(zone, system, float(zone.get("deficit_mm") or 0.0))
             if plan.should_run:
                 queue.append((zone["id"], None))
 
         if not queue:
-            _LOGGER.info("Sequenza non avviata: nessuna linea richiede acqua")
+            _LOGGER.info(
+                "Sequenza non avviata: nessuna linea%s richiede acqua",
+                f" del gruppo {category}" if category else "",
+            )
             return
 
         self._task = self._hass.async_create_task(self._run(queue, trigger=trigger))

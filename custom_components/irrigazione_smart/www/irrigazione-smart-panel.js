@@ -355,6 +355,11 @@ class IrrigazioneSmartPanel extends HTMLElement {
     onClick(".edit-system", () => this._openSystemDialog());
     onClick(".retry", () => this._fetchOverview());
     onClick(".run-all", () => this._mutate("POST", "run", {}));
+    onClick(".run-group", (e) =>
+      this._mutate("POST", "run", {
+        categoria: e.currentTarget.getAttribute("data-cat"),
+      })
+    );
     onClick(".stop-all", () => this._mutate("POST", "stop", {}));
     onClick(".run-zone", (e) =>
       this._openForceDialog(e.currentTarget.getAttribute("data-id"))
@@ -922,6 +927,25 @@ class IrrigazioneSmartPanel extends HTMLElement {
     </div>`;
   }
 
+  /* Raggruppa le linee per categoria, nell'ordine previsto, saltando i
+     gruppi vuoti. Prato e aiuole hanno irrigatori diversi: tenerli
+     mescolati in un unico elenco confonde. */
+  _groupZones(zones) {
+    const options = this._overview.options || {};
+    const order = options.categories || ["prato", "aiuole", "orto", "altro"];
+    const labels = options.category_labels || {};
+    const icons = options.category_icons || {};
+
+    return order
+      .map((key) => ({
+        key,
+        label: labels[key] || key,
+        icon: icons[key] || "mdi:sprinkler-variant",
+        zones: zones.filter((z) => (z.category || "altro") === key),
+      }))
+      .filter((group) => group.zones.length);
+  }
+
   _linesCard(zones) {
     if (!zones.length) {
       return `<ha-card><div class="inner">
@@ -935,7 +959,10 @@ class IrrigazioneSmartPanel extends HTMLElement {
     }
 
     const running = this._overview.running || {};
-    const rows = zones.map((z) => {
+    const busyNow = !!running.active;
+    const groups = this._groupZones(zones);
+
+    const rowFor = (z) => {
       const c = z.computed || {};
       const plan = c.plan || {};
       const st = zoneStatus(z, running.active ? running.zone_id : null);
@@ -973,15 +1000,36 @@ class IrrigazioneSmartPanel extends HTMLElement {
         }
         <ha-switch data-zone-toggle="${z.id}" ${z.enabled ? "checked" : ""}></ha-switch>
       </div>`;
-    }).join("");
+    };
 
-    return `<ha-card><div class="inner">
-      <div class="card-head">
-        <ha-icon icon="mdi:pipe"></ha-icon><h2>Master di linea</h2>
-      </div>
-      <p class="muted small nomargin">Ogni interruttore abilita o esclude la singola linea.</p>
-      ${rows}
-    </div></ha-card>`;
+    // Una card per gruppo: prato e aiuole si comandano separatamente.
+    return groups
+      .map((group) => {
+        const chiedono = group.zones.filter(
+          (z) => ((z.computed || {}).plan || {}).should_run
+        ).length;
+        const attive = group.zones.filter((z) => z.enabled).length;
+
+        return `<ha-card><div class="inner">
+          <div class="card-head">
+            <ha-icon icon="${esc(group.icon)}"></ha-icon>
+            <h2>${esc(group.label)}</h2>
+            <span class="sub">${attive}/${group.zones.length} attive</span>
+            <span class="spacer"></span>
+            ${
+              chiedono && !busyNow
+                ? `<button type="button" class="btn primary run-group" data-cat="${esc(group.key)}">
+                     Irriga ${esc(group.label.toLowerCase())}
+                   </button>`
+                : chiedono
+                ? `<span class="badge run">${chiedono} in attesa</span>`
+                : `<span class="badge ok">a posto</span>`
+            }
+          </div>
+          ${group.zones.map(rowFor).join("")}
+        </div></ha-card>`;
+      })
+      .join("");
   }
 
   /* Ultima irrigazione: le forzature si segnalano ma restano secondarie
@@ -1052,24 +1100,44 @@ class IrrigazioneSmartPanel extends HTMLElement {
 
   _zoneTab() {
     const zones = this._overview.zones || [];
-    const body = zones.length
-      ? zones.map((z) => this._zoneRow(z)).join("")
-      : `<div class="empty-state">
-           <ha-icon icon="mdi:sprinkler-variant"></ha-icon>
-           <p>Nessuna zona configurata.</p>
-           <p class="muted small">Aggiungi la prima zona per iniziare a calcolare il bilancio idrico.</p>
-           <div class="empty-cta">${this._button("add-zone", "Aggiungi zona", { primary: true })}</div>
-         </div>`;
 
-    return `<ha-card><div class="inner">
-        <div class="card-head">
-          <ha-icon icon="mdi:sprinkler"></ha-icon>
-          <h2>Zone e linee</h2>
-          <span class="spacer"></span>
-          ${this._button("add-zone", "Aggiungi zona", { primary: true })}
-        </div>
-        ${body}
-      </div></ha-card>
+    if (!zones.length) {
+      return `<ha-card><div class="inner">
+          <div class="card-head">
+            <ha-icon icon="mdi:sprinkler"></ha-icon>
+            <h2>Zone e linee</h2>
+            <span class="spacer"></span>
+            ${this._button("add-zone", "Aggiungi zona", { primary: true })}
+          </div>
+          <div class="empty-state">
+            <ha-icon icon="mdi:sprinkler-variant"></ha-icon>
+            <p>Nessuna zona configurata.</p>
+            <p class="muted small">Aggiungi la prima zona per iniziare a calcolare il bilancio idrico.</p>
+            <div class="empty-cta">${this._button("add-zone", "Aggiungi zona", { primary: true })}</div>
+          </div>
+        </div></ha-card>
+        ${this._systemCard(this._overview.system)}`;
+    }
+
+    // Una card per gruppo, così i parametri del prato non si confondono
+    // con quelli delle aiuole.
+    const groups = this._groupZones(zones)
+      .map(
+        (group) => `<ha-card><div class="inner">
+          <div class="card-head">
+            <ha-icon icon="${esc(group.icon)}"></ha-icon>
+            <h2>${esc(group.label)}</h2>
+            <span class="sub">${group.zones.length} ${group.zones.length === 1 ? "linea" : "linee"}</span>
+          </div>
+          ${group.zones.map((z) => this._zoneRow(z)).join("")}
+        </div></ha-card>`
+      )
+      .join("");
+
+    return `<div class="tab-actions">
+        ${this._button("add-zone", "Aggiungi zona", { primary: true })}
+      </div>
+      ${groups}
       ${this._systemCard(this._overview.system)}`;
   }
 
@@ -1928,6 +1996,8 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .badge.q-sconsigliata { background: color-mix(in srgb, var(--error-color, #db4437) 18%, transparent); color: var(--error-color, #db4437); }
       .warntext { color: var(--warning-color, #ffa600); }
       .actions { display: flex; gap: 8px; margin-top: 14px; }
+      .tab-actions { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+      .card-head .sub { flex: 0 0 auto; }
 
       /* pallino di stato: verde ok, giallo assetata, rosso in carenza,
          azzurro mentre irriga */

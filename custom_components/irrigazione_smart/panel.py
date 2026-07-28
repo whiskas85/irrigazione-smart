@@ -23,6 +23,9 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.loader import async_get_integration
 
 from .const import (
+    CATEGORY_ICONS,
+    CATEGORY_LABELS,
+    CATEGORY_ORDER,
     CONF_ELEVATION,
     CONF_HUMIDITY_ENTITY,
     CONF_IRRADIANCE_ENTITY,
@@ -33,6 +36,7 @@ from .const import (
     DOMAIN,
     SIGNAL_STATE_CHANGED,
     SIGNAL_ZONES_CHANGED,
+    zone_category,
 )
 from .executor import get_executor
 from .hydro import (
@@ -153,7 +157,13 @@ def _build_overview(hass: HomeAssistant) -> dict[str, Any]:
         plan = evaluate_zone(
             zone, system, float(zone.get("deficit_mm") or 0.0), wind_kmh=wind_kmh
         )
-        zones.append({**zone, "computed": _zone_computed(zone, params, plan)})
+        zones.append(
+            {
+                **zone,
+                "category": zone_category(zone.get("zone_type")),
+                "computed": _zone_computed(zone, params, plan),
+            }
+        )
         plans.append((zone["id"], zone.get("name", ""), plan))
 
     return {
@@ -193,6 +203,9 @@ def _build_overview(hass: HomeAssistant) -> dict[str, Any]:
             "emitters": sorted(EMITTER_EFFICIENCY),
             "hooks": list(HOOK_LABELS),
             "hook_labels": HOOK_LABELS,
+            "categories": CATEGORY_ORDER,
+            "category_labels": CATEGORY_LABELS,
+            "category_icons": CATEGORY_ICONS,
         },
     }
 
@@ -529,7 +542,9 @@ class RunView(HomeAssistantView):
                 return self.json_message("La linea è disattivata", 400)
             await executor.async_run_zone(zone_id, payload.get("minuti"))
         else:
-            await executor.async_start_sequence()
+            # `categoria` limita la sequenza a un gruppo: solo il prato,
+            # solo le aiuole
+            await executor.async_start_sequence(category=payload.get("categoria"))
 
         return self.json({"overview": _build_overview(hass)})
 

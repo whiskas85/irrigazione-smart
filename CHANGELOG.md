@@ -8,6 +8,18 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Aggiunto
+- **Prato e aiuole sono gestiti separatamente.** Hanno irrigatori diversi
+  — statici e turbine contro ala gocciolante — e quindi portate e durate
+  diverse: tenerli in un unico elenco confondeva.
+  - Dashboard e scheda Zone mostrano una card per gruppo (Prato, Aiuole,
+    Orto), ciascuna con le proprie linee e il conteggio di quelle attive
+  - Ogni gruppo ha il suo pulsante **"Irriga prato"** / **"Irriga aiuole"**:
+    parte solo quel gruppo, senza toccare gli altri
+  - Il servizio `avvia_sequenza` accetta il campo `categoria`, così la
+    stessa divisione è disponibile nelle automazioni
+  - La categoria si ricava dal tipo di zona: non c'è nulla da configurare
+
 ## [0.5.1] - 2026-07-28
 
 ### Corretto

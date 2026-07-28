@@ -28,6 +28,35 @@ UPDATE_INTERVAL_MIN: Final = 10
 
 PLATFORMS: Final[list[Platform]] = [Platform.SWITCH, Platform.SENSOR]
 
+# Prato e aiuole hanno irrigatori diversi — statici e turbine contro ala
+# gocciolante — e quindi portate, durate e abitudini diverse. Vanno tenuti
+# separati in pagina e devono poter partire l'uno senza l'altro.
+ZONE_CATEGORIES: Final[dict[str, str]] = {
+    "prato_microterme": "prato",
+    "prato_macroterme": "prato",
+    "aiuola_arbusti": "aiuole",
+    "aiuola_fiorita": "aiuole",
+    "orto": "orto",
+}
+CATEGORY_ORDER: Final[list[str]] = ["prato", "aiuole", "orto", "altro"]
+CATEGORY_LABELS: Final[dict[str, str]] = {
+    "prato": "Prato",
+    "aiuole": "Aiuole",
+    "orto": "Orto",
+    "altro": "Altro",
+}
+CATEGORY_ICONS: Final[dict[str, str]] = {
+    "prato": "mdi:grass",
+    "aiuole": "mdi:flower",
+    "orto": "mdi:carrot",
+    "altro": "mdi:sprinkler-variant",
+}
+
+
+def zone_category(zone_type: str | None) -> str:
+    """Categoria di una zona; `altro` per i tipi non riconosciuti."""
+    return ZONE_CATEGORIES.get(zone_type or "", "altro")
+
 # Segnali interni: le zone si creano a runtime, quindi le entità vanno
 # aggiunte e rimosse a caldo senza riavviare Home Assistant.
 SIGNAL_ZONES_CHANGED: Final = f"{DOMAIN}_zones_changed"

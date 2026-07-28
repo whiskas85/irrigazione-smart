@@ -29,8 +29,26 @@ irriga_linea:
 avvia_sequenza:
   name: Avvia sequenza
   description: >-
-    Avvia l'irrigazione di tutte le linee che richiedono acqua, in ordine,
+    Avvia l'irrigazione delle linee che richiedono acqua, in ordine,
     rispettando cicli e pause di assorbimento.
+  fields:
+    categoria:
+      name: Gruppo
+      description: >-
+        Limita l'irrigazione a un solo gruppo. Prato e aiuole hanno
+        irrigatori diversi e spesso conviene farli partire separatamente.
+        Se omesso, vengono irrigate tutte le linee.
+      required: false
+      example: prato
+      selector:
+        select:
+          options:
+            - label: Prato
+              value: prato
+            - label: Aiuole
+              value: aiuole
+            - label: Orto
+              value: orto
 
 ferma:
   name: Ferma irrigazione
