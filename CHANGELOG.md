@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-07-28
+
 ### Corretto
 - **"Prossima irrigazione mercoledì" con la finestra che apriva fra sei
   minuti.** Correggendo il programmatore nella 0.9.2 avevo fatto partire
