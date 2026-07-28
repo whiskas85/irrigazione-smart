@@ -42,6 +42,31 @@ DEFAULT_SYSTEM: dict[str, Any] = {
     # Flussostato: informativo, non blocca mai l'irrigazione
     "flow_entity": None,
     "valve_timeout_s": 30,
+    # Master di notifiche e azioni: spenti, non parte nulla anche se le
+    # singole voci sono abilitate.
+    "notifications_enabled": True,
+    "actions_enabled": True,
+}
+
+# Una notifica è una chiamata di servizio: non è cablata su `notify`, così
+# si può richiamare anche uno script proprio.
+NOTIFICATION_FIELDS: dict[str, Any] = {
+    "name": "Nuova notifica",
+    "enabled": True,
+    "service": "",
+    "title": "Irrigazione",
+    "message": "Irrigazione conclusa: {completate} linee in {durata} min",
+    # quando inviarla
+    "trigger": "after_irrigation",
+}
+
+# Un'azione è una chiamata di servizio agganciata a un momento preciso.
+ACTION_FIELDS: dict[str, Any] = {
+    "name": "Nuova azione",
+    "enabled": True,
+    "hook": "after_irrigation",
+    "service": "",
+    "data": "{}",
 }
 
 # Campi accettati su una zona, con il valore usato quando non arrivano.
@@ -103,7 +128,13 @@ class IrrigazioneStore:
 
     def __init__(self, hass: HomeAssistant) -> None:
         self._store: Store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
-        self._data: dict[str, Any] = {"system": {}, "zones": {}, "daily": {}}
+        self._data: dict[str, Any] = {
+            "system": {},
+            "zones": {},
+            "daily": {},
+            "notifications": {},
+            "actions": {},
+        }
 
     async def async_load(self) -> dict[str, Any]:
         """Carica da disco, completando i campi mancanti coi default."""
@@ -113,12 +144,16 @@ class IrrigazioneStore:
                 "system": {**DEFAULT_SYSTEM, **(stored.get("system") or {})},
                 "zones": stored.get("zones") or {},
                 "daily": {**DEFAULT_DAILY, **(stored.get("daily") or {})},
+                "notifications": stored.get("notifications") or {},
+                "actions": stored.get("actions") or {},
             }
         else:
             self._data = {
                 "system": dict(DEFAULT_SYSTEM),
                 "zones": {},
                 "daily": dict(DEFAULT_DAILY),
+                "notifications": {},
+                "actions": {},
             }
         return self._data
 
@@ -244,6 +279,53 @@ class IrrigazioneStore:
         if zone_id not in self._data["zones"]:
             return False
         del self._data["zones"][zone_id]
+        self._save()
+        return True
+
+    # ------------------------------------------------ notifiche e azioni
+
+    @property
+    def notifications(self) -> dict[str, Any]:
+        return self._data["notifications"]
+
+    @property
+    def actions(self) -> dict[str, Any]:
+        return self._data["actions"]
+
+    def _collection(self, kind: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Ritorna (contenitore, campi ammessi) per notifiche o azioni."""
+        if kind == "notifications":
+            return self._data["notifications"], NOTIFICATION_FIELDS
+        return self._data["actions"], ACTION_FIELDS
+
+    def async_create_item(self, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+        items, fields = self._collection(kind)
+        item_id = ulid_now()
+        item: dict[str, Any] = {"id": item_id}
+        for key, default in fields.items():
+            item[key] = payload.get(key, default)
+        items[item_id] = item
+        self._save()
+        return item
+
+    def async_update_item(
+        self, kind: str, item_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        items, fields = self._collection(kind)
+        item = items.get(item_id)
+        if item is None:
+            return None
+        for key in fields:
+            if key in payload:
+                item[key] = payload[key]
+        self._save()
+        return item
+
+    def async_delete_item(self, kind: str, item_id: str) -> bool:
+        items, _fields = self._collection(kind)
+        if item_id not in items:
+            return False
+        del items[item_id]
         self._save()
         return True
 

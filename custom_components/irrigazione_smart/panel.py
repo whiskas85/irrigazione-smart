@@ -47,6 +47,7 @@ from .hydro import (
     window_quality,
 )
 from .logbook import get_log
+from .notifier import HOOK_LABELS, build_context, get_notifier
 from .store import IrrigazioneStore
 
 PANEL_URL_PATH = "irrigazione-smart"
@@ -182,10 +183,16 @@ def _build_overview(hass: HomeAssistant) -> dict[str, Any]:
         "flow": _flow_payload(hass, system),
         "schedule": _schedule_payload(plans, window, system),
         "meteo": _meteo_payload(cdata, store),
+        "notifications": sorted(
+            store.notifications.values(), key=lambda i: i.get("name", "")
+        ),
+        "actions": sorted(store.actions.values(), key=lambda i: i.get("name", "")),
         "options": {
             "zone_types": sorted(ZONE_PRESETS),
             "soils": sorted(SOIL_PROPS),
             "emitters": sorted(EMITTER_EFFICIENCY),
+            "hooks": list(HOOK_LABELS),
+            "hook_labels": HOOK_LABELS,
         },
     }
 
@@ -377,6 +384,101 @@ class LogView(HomeAssistantView):
         return self.json({"entries": []})
 
 
+class ItemsView(HomeAssistantView):
+    """Creazione di notifiche e azioni."""
+
+    # Prefisso `items/` esplicito: un segnaposto in cima al percorso
+    # catturerebbe anche `run` e `stop`.
+    url = "/api/irrigazione_smart/items/{kind}"
+    name = "api:irrigazione_smart:items"
+    requires_auth = True
+
+    async def post(self, request, kind: str):
+        if kind not in ("notifications", "actions"):
+            return self.json_message("Tipo non valido", 404)
+        _require_admin(request)
+        hass: HomeAssistant = request.app["hass"]
+        store = _get_store(hass)
+        if store is None:
+            return self.json_message("Integration non configurata", 400)
+
+        payload = await request.json()
+        item = store.async_create_item(kind, payload)
+        _notify(hass)
+        return self.json({"item": item, "overview": _build_overview(hass)})
+
+
+class ItemDetailView(HomeAssistantView):
+    """Modifica, eliminazione e prova di una notifica o di un'azione."""
+
+    url = "/api/irrigazione_smart/items/{kind}/{item_id}"
+    name = "api:irrigazione_smart:item_detail"
+    requires_auth = True
+
+    async def post(self, request, kind: str, item_id: str):
+        if kind not in ("notifications", "actions"):
+            return self.json_message("Tipo non valido", 404)
+        _require_admin(request)
+        hass: HomeAssistant = request.app["hass"]
+        store = _get_store(hass)
+        if store is None:
+            return self.json_message("Integration non configurata", 400)
+
+        payload = await request.json()
+
+        # La prova ignora gli interruttori: serve proprio a verificare la
+        # configurazione mentre la si sta scrivendo.
+        if payload.get("test"):
+            notifier = get_notifier(hass)
+            item = {**(store.async_update_item(kind, item_id, {}) or {}), **payload}
+            if notifier is None or not item:
+                return self.json_message("Voce non trovata", 404)
+            context = build_context(_demo_event_data())
+            ok = (
+                await notifier.async_send_notification(item, context, test=True)
+                if kind == "notifications"
+                else await notifier.async_run_action(item, context, test=True)
+            )
+            return self.json({"tested": ok, "overview": _build_overview(hass)})
+
+        item = store.async_update_item(kind, item_id, payload)
+        if item is None:
+            return self.json_message("Voce non trovata", 404)
+        _notify(hass)
+        return self.json({"item": item, "overview": _build_overview(hass)})
+
+    async def delete(self, request, kind: str, item_id: str):
+        if kind not in ("notifications", "actions"):
+            return self.json_message("Tipo non valido", 404)
+        _require_admin(request)
+        hass: HomeAssistant = request.app["hass"]
+        store = _get_store(hass)
+        if store is None:
+            return self.json_message("Integration non configurata", 400)
+
+        if not store.async_delete_item(kind, item_id):
+            return self.json_message("Voce non trovata", 404)
+        _notify(hass)
+        return self.json({"overview": _build_overview(hass)})
+
+
+def _demo_event_data() -> dict[str, Any]:
+    """Dati verosimili per provare una notifica senza irrigare davvero."""
+    return {
+        "nome": "Prato Sud",
+        "minuti": 25,
+        "acqua_mm": 6.2,
+        "deficit_mm": 18.4,
+        "deficit_residuo_mm": 0.0,
+        "durata_min": 47,
+        "linee_completate": ["a", "b"],
+        "linee_fallite": [],
+        "motivo": "prova",
+        "valvola": "switch.esempio",
+        "prossima_nome": "Aiuola Nord",
+    }
+
+
 class RunView(HomeAssistantView):
     """Avvio forzato: una linea o l'intera sequenza."""
 
@@ -472,6 +574,8 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
         hass.http.register_view(SystemView())
         hass.http.register_view(ZoneMoveView())
         hass.http.register_view(LogView())
+        hass.http.register_view(ItemsView())
+        hass.http.register_view(ItemDetailView())
         hass.http.register_view(RunView())
         hass.http.register_view(StopView())
         domain_data[_HTTP_FLAG] = True

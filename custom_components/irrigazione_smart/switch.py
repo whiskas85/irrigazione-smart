@@ -48,7 +48,19 @@ async def async_setup_entry(
         if new:
             async_add_entities(new)
 
-    async_add_entities([MasterSwitch(entry.entry_id, store)])
+    async_add_entities(
+        [
+            MasterSwitch(entry.entry_id, store),
+            FlagSwitch(
+                entry.entry_id, store, "notifications_enabled",
+                "Master notifiche", "mdi:bell",
+            ),
+            FlagSwitch(
+                entry.entry_id, store, "actions_enabled",
+                "Master azioni", "mdi:flash",
+            ),
+        ]
+    )
     _add_new_zones()
 
     entry.async_on_unload(
@@ -94,6 +106,47 @@ class MasterSwitch(IrrigazioneEntity, SwitchEntity):
         self._store.async_update_system({"master_enabled": value})
         self.async_write_ha_state()
         # avvisa il resto: il pannello e le altre entità leggono lo stesso store
+        async_dispatcher_send(self.hass, SIGNAL_STATE_CHANGED)
+
+
+class FlagSwitch(IrrigazioneEntity, SwitchEntity):
+    """Master di notifiche o azioni, condiviso con Home Assistant.
+
+    Spento, nulla parte anche se le singole voci sono abilitate: è
+    l'interruttore da usare in vacanza o durante i lavori all'impianto.
+    """
+
+    def __init__(
+        self,
+        entry_id: str,
+        store: IrrigazioneStore,
+        key: str,
+        name: str,
+        icon: str,
+    ) -> None:
+        super().__init__(entry_id, store)
+        self._key = key
+        self._attr_name = name
+        self._attr_icon = icon
+        self._attr_unique_id = f"{entry_id}_{key}"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return system_device_info(self._entry_id)
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self._store.system.get(self._key, True))
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        self._set(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        self._set(False)
+
+    def _set(self, value: bool) -> None:
+        self._store.async_update_system({self._key: value})
+        self.async_write_ha_state()
         async_dispatcher_send(self.hass, SIGNAL_STATE_CHANGED)
 
 

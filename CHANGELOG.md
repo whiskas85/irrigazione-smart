@@ -8,6 +8,31 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Aggiunto
+- **Notifiche e azioni** (scheda *Azioni*), sul modello di Alarmo:
+  - le notifiche non sono cablate su `notify`: chiami il servizio che
+    vuoi, anche un tuo script
+  - le azioni chiamano un servizio con dati JSON nei momenti chiave:
+    prima e dopo l'irrigazione, prima e dopo ogni linea, e quando una
+    linea non parte
+  - **pulsante Prova** su ogni voce: la invia subito con dati d'esempio,
+    ignorando gli interruttori, per verificarla mentre la scrivi
+  - due **master condivisi con Home Assistant** (`switch` Master notifiche
+    e Master azioni) più l'interruttore della singola voce
+  - segnaposto nei messaggi: `{linea}`, `{minuti}`, `{acqua_mm}`,
+    `{durata}`, `{completate}`, `{fallite}`, `{motivo}`, `{prossima}`
+
+### Corretto
+- **L'irrigazione non si accorgeva di essere stata fermata da fuori**: se
+  la valvola veniva chiusa da Home Assistant, l'esecutore continuava ad
+  aspettare e la pagina dichiarava un'irrigazione che non stava più
+  avvenendo. Ora la valvola viene sorvegliata per tutta la durata: se si
+  chiude, l'irrigazione termina, viene registrata come interrotta e il
+  deficit scala solo dell'acqua realmente erogata
+- Spegnere il **master** durante l'irrigazione ferma l'intera sequenza,
+  non solo la linea in corso. Le linee non ancora raggiunte non vengono
+  marcate come fallite: non sono state tentate
+
 ## [0.3.1] - 2026-07-28
 
 ### Corretto

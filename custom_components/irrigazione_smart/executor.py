@@ -41,6 +41,18 @@ _LOGGER = logging.getLogger(__name__)
 OPEN_STATES = {"on", "open", "opening"}
 CLOSED_STATES = {"off", "closed"}
 
+# Ogni quanto si controlla che la valvola sia ancora aperta durante
+# l'irrigazione. Un secondo basta perché la pagina resti veritiera.
+WATCH_INTERVAL = 1.0
+
+
+class IrrigationAborted(Exception):
+    """L'irrigazione è stata interrotta da fuori: si ferma tutta la sequenza."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
 
 class IrrigationExecutor:
     """Esegue una singola linea o l'intera sequenza."""
@@ -150,6 +162,32 @@ class IrrigationExecutor:
         except Exception:
             _LOGGER.exception("Chiusura della valvola %s fallita", entity_id)
 
+    async def _irrigate_for(self, valve: str, minutes: float) -> str:
+        """Attende la durata sorvegliando che l'acqua stia ancora scorrendo.
+
+        Non basta dormire: se qualcuno chiude la valvola da Home Assistant,
+        o spegne il master, l'irrigazione è finita davvero e il sistema non
+        deve continuare a dichiarare che sta irrigando.
+
+        Ritorna "completato", "valvola_chiusa" oppure "master_spento".
+        """
+        loop = self._hass.loop
+        deadline = loop.time() + minutes * 60.0
+
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return "completato"
+
+            await asyncio.sleep(min(WATCH_INTERVAL, remaining))
+
+            if not self._store.system.get("master_enabled", True):
+                return "master_spento"
+
+            state = self._hass.states.get(valve)
+            if state is None or state.state not in OPEN_STATES:
+                return "valvola_chiusa"
+
     # ---------------------------------------------------------- avvio API
 
     async def async_run_zone(
@@ -203,6 +241,7 @@ class IrrigationExecutor:
         started_at = dt_util.utcnow()
         completed: list[str] = []
         failed: list[str] = []
+        aborted_reason: str | None = None
 
         self._hass.bus.async_fire(
             EVENT_STARTED,
@@ -220,15 +259,26 @@ class IrrigationExecutor:
                     continue
 
                 nxt = queue[index + 1][0] if index + 1 < len(queue) else None
-                ok = await self._run_zone(zone_id, minutes, next_zone_id=nxt)
+                try:
+                    ok = await self._run_zone(zone_id, minutes, next_zone_id=nxt)
+                except IrrigationAborted:
+                    # la linea in corso è stata interrotta: va contata
+                    failed.append(zone_id)
+                    raise
                 (completed if ok else failed).append(zone_id)
 
                 # pausa tra una linea e l'altra, non dopo l'ultima
                 gap = int(self._store.system.get("gap_minutes", 5) or 0)
                 if gap and index + 1 < len(queue):
                     self._publish(phase="pausa_tra_linee", zone_id=None)
-                    await asyncio.sleep(gap * 60)
+                    if not await self._pause(gap):
+                        raise IrrigationAborted("master spento durante la pausa")
 
+        except IrrigationAborted as aborted:
+            # Le linee non ancora raggiunte non sono "fallite": non sono
+            # state nemmeno tentate. Restano col loro deficit a bilancio.
+            _LOGGER.info("Sequenza interrotta: %s", aborted.reason)
+            aborted_reason = aborted.reason
         except asyncio.CancelledError:
             _LOGGER.info("Irrigazione interrotta su richiesta")
             raise
@@ -242,9 +292,22 @@ class IrrigationExecutor:
                     "durata_min": round(duration, 1),
                     "linee_completate": completed,
                     "linee_fallite": failed,
+                    "interrotta": aborted_reason,
                 },
             )
             async_dispatcher_send(self._hass, SIGNAL_STATE_CHANGED)
+
+    async def _pause(self, minutes: float) -> bool:
+        """Pausa fra due linee, interrompibile spegnendo il master."""
+        loop = self._hass.loop
+        deadline = loop.time() + minutes * 60.0
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return True
+            await asyncio.sleep(min(WATCH_INTERVAL, remaining))
+            if not self._store.system.get("master_enabled", True):
+                return False
 
     def _fire_failed(
         self, zone_id: str, zone: dict[str, Any], motivo: str
@@ -351,9 +414,37 @@ class IrrigationExecutor:
                     return False
 
                 confirmed_any = True
-                await asyncio.sleep(per_cycle * 60)
+                cycle_start = dt_util.utcnow()
+                outcome = await self._irrigate_for(valve, per_cycle)
+
+                # si conta solo l'acqua effettivamente erogata, anche se
+                # l'irrigazione è stata interrotta a metà
+                elapsed = (dt_util.utcnow() - cycle_start).total_seconds() / 60.0
+                applied += params.applied_mm(min(elapsed, per_cycle))
                 await self._close(valve)
-                applied += params.applied_mm(per_cycle)
+
+                if outcome != "completato":
+                    motivo = (
+                        "master spento durante l'irrigazione"
+                        if outcome == "master_spento"
+                        else f"la valvola {valve} è stata chiusa dall'esterno"
+                    )
+                    _LOGGER.warning("Linea %s interrotta: %s", name, motivo)
+                    self._store.async_set_deficit(
+                        zone_id, max(0.0, deficit - applied)
+                    )
+                    self._store.async_set_runtime(
+                        zone_id,
+                        last_irrigation=dt_util.now().isoformat(),
+                        last_duration_min=round(min(elapsed, per_cycle), 1),
+                        last_trigger="interrotta",
+                    )
+                    self._fire_failed(zone_id, zone, motivo)
+                    # spegnere il master significa fermare tutto, non solo
+                    # la linea in corso
+                    if outcome == "master_spento":
+                        raise IrrigationAborted(motivo)
+                    return False
 
                 if cycle < cycles and soak:
                     self._publish(phase="assorbimento")

@@ -11,6 +11,7 @@ from .const import DOMAIN, PLATFORMS
 from .coordinator import IrrigazioneCoordinator
 from .executor import IrrigationExecutor
 from .logbook import IrrigazioneLog, async_subscribe_events
+from .notifier import Notifier
 from .panel import async_remove_panel, async_setup_panel, async_setup_store
 from .services import async_setup_services
 
@@ -32,6 +33,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await activity_log.async_load()
     hass.data[DOMAIN]["log"] = activity_log
     for unsub in async_subscribe_events(hass, activity_log):
+        entry.async_on_unload(unsub)
+
+    notifier = Notifier(hass, store)
+    hass.data[DOMAIN]["notifier"] = notifier
+    for unsub in notifier.async_subscribe():
         entry.async_on_unload(unsub)
 
     await async_setup_services(hass)

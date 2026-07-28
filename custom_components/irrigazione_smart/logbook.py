@@ -126,7 +126,16 @@ def async_subscribe_events(hass: HomeAssistant, log: IrrigazioneLog) -> list:
         failed = event.data.get("linee_fallite") or []
         done = event.data.get("linee_completate") or []
         durata = _fmt_min(event.data.get("durata_min"))
-        if failed:
+        interrotta = event.data.get("interrotta")
+
+        if interrotta:
+            log.add(
+                "finished",
+                f"Irrigazione interrotta dopo {durata} min: {interrotta}",
+                level=WARNING,
+                data=dict(event.data),
+            )
+        elif failed:
             log.add(
                 "finished",
                 f"Irrigazione conclusa in {durata} min: "

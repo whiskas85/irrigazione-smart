@@ -23,8 +23,13 @@ const TABS = [
   { id: "dashboard", label: "Dashboard", icon: "mdi:view-dashboard-outline" },
   { id: "zone", label: "Zone", icon: "mdi:sprinkler-variant" },
   { id: "meteo", label: "Meteo", icon: "mdi:weather-partly-cloudy" },
+  { id: "azioni", label: "Azioni", icon: "mdi:bell-cog-outline" },
   { id: "log", label: "Log", icon: "mdi:format-list-bulleted" },
 ];
+
+/* Segnaposto utilizzabili nei messaggi delle notifiche. */
+const PLACEHOLDERS =
+  "{linea} {minuti} {acqua_mm} {durata} {completate} {fallite} {motivo} {prossima}";
 
 /* Icona predefinita per tipo di zona, quando la linea non ne ha una sua. */
 const ZONE_TYPE_ICONS = {
@@ -360,6 +365,59 @@ class IrrigazioneSmartPanel extends HTMLElement {
         direction: el.getAttribute("data-dir"),
       });
     });
+    onClick(".add-item", (e) =>
+      this._openItemDialog(e.currentTarget.getAttribute("data-kind"), null)
+    );
+    onClick(".edit-item", (e) =>
+      this._openItemDialog(
+        e.currentTarget.getAttribute("data-kind"),
+        e.currentTarget.getAttribute("data-id")
+      )
+    );
+    onClick(".delete-item", (e) => {
+      const el = e.currentTarget;
+      this._mutate(
+        "DELETE",
+        `items/${el.getAttribute("data-kind")}/${el.getAttribute("data-id")}`
+      );
+    });
+    onClick(".test-item", async (e) => {
+      const el = e.currentTarget;
+      const kind = el.getAttribute("data-kind");
+      el.disabled = true;
+      el.textContent = "Invio…";
+      try {
+        const res = await this._api(
+          "POST",
+          `items/${kind}/${el.getAttribute("data-id")}`,
+          { test: true }
+        );
+        el.textContent = res && res.tested ? "Inviata" : "Fallita";
+      } catch (_err) {
+        el.textContent = "Fallita";
+      }
+      // l'esito resta visibile un istante, poi si torna al pulsante
+      setTimeout(() => this._render(), 2500);
+    });
+
+    // master di notifiche e azioni
+    sr.querySelectorAll("[data-flag]").forEach((el) => {
+      el.addEventListener("change", (e) =>
+        this._mutate("POST", "system", {
+          [el.getAttribute("data-flag")]: !!e.target.checked,
+        })
+      );
+    });
+    sr.querySelectorAll("[data-item-toggle]").forEach((el) => {
+      el.addEventListener("change", (e) =>
+        this._mutate(
+          "POST",
+          `items/${el.getAttribute("data-kind")}/${el.getAttribute("data-item-toggle")}`,
+          { enabled: !!e.target.checked }
+        )
+      );
+    });
+
     onClick(".clear-log", async () => {
       try {
         await this._api("DELETE", "log");
@@ -409,7 +467,150 @@ class IrrigazioneSmartPanel extends HTMLElement {
     if (this._tab === "zone") return err + this._zoneTab();
     if (this._tab === "meteo") return err + this._meteoTab();
     if (this._tab === "log") return err + this._logTab();
+    if (this._tab === "azioni") return err + this._actionsTab();
     return err + this._dashboardTab();
+  }
+
+  // ------------------------------------------------------ NOTIFICHE/AZIONI
+
+  _actionsTab() {
+    const sys = this._overview.system;
+    const notifications = this._overview.notifications || [];
+    const actions = this._overview.actions || [];
+    const hookLabels = (this._overview.options || {}).hook_labels || {};
+
+    const list = (items, kind, emptyText) =>
+      items.length
+        ? items
+            .map(
+              (it) => `<div class="row${it.enabled ? "" : " dim"}">
+          <ha-icon icon="${kind === "notifications" ? "mdi:bell-outline" : "mdi:flash-outline"}"></ha-icon>
+          <div class="row-main">
+            <span class="row-label">${esc(it.name)}</span>
+            <span class="sub">${esc(it.service || "servizio non impostato")} · ${esc(
+              hookLabels[kind === "notifications" ? it.trigger : it.hook] || ""
+            )}</span>
+          </div>
+          <button type="button" class="btn test-item" data-kind="${kind}" data-id="${it.id}">Prova</button>
+          <ha-icon-button class="edit-item" data-kind="${kind}" data-id="${it.id}" label="Modifica">
+            <ha-icon icon="mdi:pencil"></ha-icon>
+          </ha-icon-button>
+          <ha-icon-button class="delete-item" data-kind="${kind}" data-id="${it.id}" label="Elimina">
+            <ha-icon icon="mdi:delete"></ha-icon>
+          </ha-icon-button>
+          <ha-switch data-item-toggle="${it.id}" data-kind="${kind}" ${it.enabled ? "checked" : ""}></ha-switch>
+        </div>`
+            )
+            .join("")
+        : `<div class="empty-state">
+             <ha-icon icon="${kind === "notifications" ? "mdi:bell-off-outline" : "mdi:flash-off"}"></ha-icon>
+             <p>${esc(emptyText)}</p>
+           </div>`;
+
+    return `
+      <ha-card><div class="inner">
+        <div class="card-head">
+          <ha-icon icon="mdi:bell-outline"></ha-icon>
+          <h2>Notifiche</h2>
+          <span class="spacer"></span>
+          <ha-switch data-flag="notifications_enabled" ${sys.notifications_enabled ? "checked" : ""}></ha-switch>
+        </div>
+        <p class="muted small nomargin">
+          Inviate quando l'irrigazione raggiunge il momento scelto. Il servizio
+          può essere una notifica o un tuo script. Master spento: non parte nulla.
+        </p>
+        ${list(notifications, "notifications", "Nessuna notifica configurata.")}
+        <div class="actions">
+          <button type="button" class="btn primary add-item" data-kind="notifications">Aggiungi notifica</button>
+        </div>
+      </div></ha-card>
+
+      <ha-card><div class="inner">
+        <div class="card-head">
+          <ha-icon icon="mdi:flash-outline"></ha-icon>
+          <h2>Azioni</h2>
+          <span class="spacer"></span>
+          <ha-switch data-flag="actions_enabled" ${sys.actions_enabled ? "checked" : ""}></ha-switch>
+        </div>
+        <p class="muted small nomargin">
+          Chiamano un servizio nei momenti chiave dell'irrigazione: impostare un
+          numero, avviare uno script, accendere una pompa.
+        </p>
+        ${list(actions, "actions", "Nessuna azione configurata.")}
+        <div class="actions">
+          <button type="button" class="btn primary add-item" data-kind="actions">Aggiungi azione</button>
+        </div>
+      </div></ha-card>`;
+  }
+
+  _itemSpecs(kind, options) {
+    const hooks = options.hooks || [];
+    const labels = options.hook_labels || {};
+    const common = [
+      { key: "name", label: "Nome", type: "text" },
+      {
+        key: "service", label: "Servizio da chiamare", type: "text",
+        helper: "Es. notify.mobile_app_telefono, oppure script.mio_script",
+      },
+    ];
+
+    if (kind === "notifications") {
+      return [
+        ...common,
+        {
+          key: "trigger", label: "Quando inviarla", type: "select",
+          options: hooks, labels,
+        },
+        { key: "title", label: "Titolo", type: "text" },
+        {
+          key: "message", label: "Messaggio", type: "text",
+          helper: `Segnaposto: ${PLACEHOLDERS}`,
+        },
+        { key: "enabled", label: "Attiva", type: "boolean" },
+      ];
+    }
+    return [
+      ...common,
+      { key: "hook", label: "Quando eseguirla", type: "select", options: hooks, labels },
+      {
+        key: "data", label: "Dati (JSON)", type: "text",
+        helper: `Es. {"entity_id": "switch.pompa"}. Segnaposto: ${PLACEHOLDERS}`,
+      },
+      { key: "enabled", label: "Attiva", type: "boolean" },
+    ];
+  }
+
+  _openItemDialog(kind, itemId) {
+    const options = this._overview.options || {};
+    const items = this._overview[kind] || [];
+    const existing = itemId ? items.find((i) => i.id === itemId) : null;
+
+    const initial = existing
+      ? { ...existing }
+      : kind === "notifications"
+      ? {
+          name: "", service: "", trigger: "after_irrigation",
+          title: "Irrigazione",
+          message: "Irrigazione conclusa: {completate} linee in {durata} min",
+          enabled: true,
+        }
+      : { name: "", service: "", hook: "after_irrigation", data: "{}", enabled: true };
+
+    const isNotif = kind === "notifications";
+    this._showForm(
+      existing
+        ? isNotif ? "Modifica notifica" : "Modifica azione"
+        : isNotif ? "Nuova notifica" : "Nuova azione",
+      this._itemSpecs(kind, options),
+      initial,
+      async (values) => {
+        const data = { ...values };
+        if (!data.name) data.name = isNotif ? "Notifica" : "Azione";
+        if (existing) await this._mutate("POST", `items/${kind}/${existing.id}`, data);
+        else await this._mutate("POST", `items/${kind}`, data);
+      },
+      existing ? "Salva" : "Aggiungi"
+    );
   }
 
   // ---------------------------------------------------------------- LOG
