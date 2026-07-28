@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-28
+
 ### Corretto
 - **Il blocco per pioggia prevista non poteva scattare.** La soglia era
   configurabile e la pagina la mostrava, ma nessuno leggeva mai le
