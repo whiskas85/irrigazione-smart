@@ -969,34 +969,70 @@ class IrrigazioneSmartPanel extends HTMLElement {
     </div>`;
   }
 
-  _select(field, labelText, options, current, labels) {
+  /* Tendina. Si usa sempre la <select> nativa: `ha-select` costruita da
+     HTML non registra le proprie voci in tutte le versioni del frontend,
+     e il risultato è una tendina che non cambia mai. Meglio un controllo
+     che funziona ovunque, vestito col tema. */
+  _select(field, labelText, options, current, labels, helper = "") {
     const text = (o) => esc(labels ? label(labels, o) : o);
-    // ha-select ha bisogno delle sue voci di lista: si usa solo se sono
-    // disponibili, altrimenti una <select> nativa (sempre funzionante).
-    const itemTag = has("ha-list-item")
-      ? "ha-list-item"
-      : has("mwc-list-item")
-      ? "mwc-list-item"
-      : null;
-
-    if (has("ha-select") && itemTag) {
-      const items = options
-        .map(
-          (o) =>
-            `<${itemTag} value="${esc(o)}"${o === current ? " selected" : ""}>${text(o)}</${itemTag}>`
-        )
-        .join("");
-      return `<ha-select data-field="${field}" label="${esc(labelText)}" fixedMenuPosition naturalMenuWidth>${items}</ha-select>`;
-    }
-
     const opts = options
       .map(
-        (o) => `<option value="${esc(o)}"${o === current ? " selected" : ""}>${text(o)}</option>`
+        (o) =>
+          `<option value="${esc(o)}"${o === current ? " selected" : ""}>${text(o)}</option>`
       )
       .join("");
     return `<div class="fld">
       <span class="fld-label">${esc(labelText)}</span>
       <select class="native" data-field="${field}">${opts}</select>
+      ${helper ? `<span class="fld-helper">${esc(helper)}</span>` : ""}
+    </div>`;
+  }
+
+  /* Elenco delle entità di Home Assistant fra cui scegliere, invece di
+     far scrivere l'entity_id a mano. `filter` restringe ulteriormente
+     (es. i soli sensori che somigliano a un flussostato). */
+  _entityOptions(domains, current, filter) {
+    const states = (this._hass && this._hass.states) || {};
+    let ids = Object.keys(states).filter((id) =>
+      domains.includes(id.split(".")[0])
+    );
+
+    if (filter) {
+      const narrowed = ids.filter((id) => filter(states[id]));
+      // se il filtro non trova nulla si mostra tutto: meglio una lista
+      // lunga di un elenco vuoto in cui non si può scegliere
+      if (narrowed.length) ids = narrowed;
+    }
+
+    const items = ids
+      .map((id) => ({
+        id,
+        name: (states[id].attributes || {}).friendly_name || id,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    // l'entità già impostata resta selezionabile anche se ora non esiste
+    if (current && !ids.includes(current)) {
+      items.unshift({ id: current, name: `${current} (non disponibile)` });
+    }
+    return items;
+  }
+
+  _entitySelect(field, labelText, current, domains, opts = {}) {
+    const { helper = "", empty = "— nessuna —", filter = null } = opts;
+    const items = this._entityOptions(domains, current, filter);
+    const options = [
+      `<option value=""${!current ? " selected" : ""}>${esc(empty)}</option>`,
+      ...items.map(
+        (it) =>
+          `<option value="${esc(it.id)}"${it.id === current ? " selected" : ""}>${esc(it.name)} — ${esc(it.id)}</option>`
+      ),
+    ].join("");
+
+    return `<div class="fld">
+      <span class="fld-label">${esc(labelText)}</span>
+      <select class="native" data-field="${field}">${options}</select>
+      ${helper ? `<span class="fld-helper">${esc(helper)}</span>` : ""}
     </div>`;
   }
 
@@ -1015,9 +1051,10 @@ class IrrigazioneSmartPanel extends HTMLElement {
     const content = `
       <div class="form">
         ${this._field("name", "Nome zona", z.name)}
-        ${this._field("valve_entity", "Entità valvola", z.valve_entity, {
-          helper: "entity_id dello switch/valve che apre la linea",
-        })}
+        ${this._entitySelect("valve_entity", "Valvola della linea", z.valve_entity,
+          ["switch", "valve", "input_boolean"], {
+            helper: "L'entità che apre la linea. Senza, la zona non può irrigare",
+          })}
         ${this._select("zone_type", "Tipo di zona", opts.zone_types || [], z.zone_type, ZONE_TYPE_LABELS)}
         ${this._select("emitter", "Erogazione", opts.emitters || [], z.emitter, EMITTER_LABELS)}
         ${this._field("icon", "Icona", z.icon, {
@@ -1101,8 +1138,22 @@ class IrrigazioneSmartPanel extends HTMLElement {
         ${this._field("wind_max_kmh", "Vento massimo", sys.wind_max_kmh, { type: "number", suffix: "km/h" })}
         ${this._field("rain_forecast_max_mm", "Pioggia prevista massima", sys.rain_forecast_max_mm, { type: "number", suffix: "mm" })}
         ${this._select("overflow_policy", "Se la finestra non basta", ["truncate", "overflow"], sys.overflow_policy, { truncate: "Escludi le linee eccedenti", overflow: "Sfora la finestra" })}
-        ${this._field("flow_entity", "Flussostato", sys.flow_entity, {
-          helper: "entity_id del sensore di portata. Solo lettura: non blocca l'irrigazione",
+        ${this._entitySelect("flow_entity", "Flussostato", sys.flow_entity, ["sensor"], {
+          helper: "Solo lettura: viene mostrato e registrato, non blocca l'irrigazione",
+          // si mostrano per primi i sensori che somigliano a un misuratore
+          // di portata, altrimenti l'elenco sarebbe ingestibile
+          filter: (st) => {
+            const dc = (st.attributes || {}).device_class || "";
+            const unit = ((st.attributes || {}).unit_of_measurement || "").toLowerCase();
+            // niente regole su "/h" da sole: prenderebbero anche km/h
+            return (
+              dc === "water" ||
+              dc === "volume_flow_rate" ||
+              unit.startsWith("l/") ||
+              unit.includes("m³") ||
+              unit.includes("gal")
+            );
+          },
         })}
         ${this._field("valve_timeout_s", "Attesa conferma valvola", sys.valve_timeout_s, {
           type: "number", suffix: "s",
@@ -1124,15 +1175,35 @@ class IrrigazioneSmartPanel extends HTMLElement {
     });
   }
 
+  /* Legge il valore di un campo. Alcuni componenti del frontend non
+     espongono `.value` finché non sono stati aggiornati: in quel caso si
+     scende al controllo nativo che hanno dentro, così un salvataggio non
+     va mai perso in silenzio. */
+  _valueOf(el) {
+    if (el.value !== undefined && el.value !== null) return el.value;
+    const inner =
+      (el.querySelector && el.querySelector("input, textarea, select")) ||
+      (el.shadowRoot && el.shadowRoot.querySelector("input, textarea, select"));
+    return inner ? inner.value : "";
+  }
+
+  _checkedOf(el) {
+    if (typeof el.checked === "boolean") return el.checked;
+    const inner =
+      (el.querySelector && el.querySelector("input")) ||
+      (el.shadowRoot && el.shadowRoot.querySelector("input"));
+    return inner ? !!inner.checked : false;
+  }
+
   _collect(dlg, spec) {
     const out = {};
     dlg.querySelectorAll("[data-field]").forEach((el) => {
       const key = el.getAttribute("data-field");
       if ((spec.booleans || []).includes(key)) {
-        out[key] = !!el.checked;
+        out[key] = this._checkedOf(el);
         return;
       }
-      const v = el.value;
+      const v = this._valueOf(el);
       if ((spec.numbers || []).includes(key)) {
         if (v === "" || v == null) {
           // vuoto = eredita per i campi ereditabili, altrimenti si omette
@@ -1201,13 +1272,6 @@ class IrrigazioneSmartPanel extends HTMLElement {
     });
     this._layoutFallback(dlg);
     this.shadowRoot.appendChild(dlg);
-    // I valori delle ha-select vanno impostati dopo l'upgrade del componente.
-    requestAnimationFrame(() => {
-      dlg.querySelectorAll("ha-select").forEach((sel) => {
-        const sl = sel.querySelector("[selected][value]");
-        if (sl) sel.value = sl.getAttribute("value");
-      });
-    });
   }
 
   _confirmDelete(zoneId) {
@@ -1370,7 +1434,8 @@ class IrrigazioneSmartPanel extends HTMLElement {
                 color: var(--primary-text-color); width: 100%; box-sizing: border-box; }
 
       .form { display: flex; flex-direction: column; gap: 14px; min-width: 300px; }
-      .form ha-textfield, .form ha-select { width: 100%; }
+      .form ha-textfield { width: 100%; }
+      .form select.native { max-width: 100%; }
       /* fallback dialogo: usato solo se ha-dialog non è registrato */
       .dlg-fallback { position: fixed; inset: 0; z-index: 99; display: flex;
                       align-items: center; justify-content: center; background: rgba(0,0,0,.45); }
