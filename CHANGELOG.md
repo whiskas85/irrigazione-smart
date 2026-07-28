@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-07-28
+
 ### Corretto
 - **«480 L/h → 10 mm/h» prometteva una conversione mai avvenuta.** I litri
   da soli non dicono quanto bagnano: serve la superficie. Senza, il motore
