@@ -95,6 +95,16 @@ segnalerà mai nulla.
 Se hai appena pubblicato una release e HACS non la vede ancora, apri
 **HACS → menu ⋮ → Ricarica dati**: il catalogo è messo in cache.
 
+> **Se non ricevi mai notifiche di aggiornamento**, è probabile che la tua
+> installazione segua il ramo `main` invece delle release: succede a chi ha
+> installato quando il repository non aveva ancora nessun tag. HACS in quel
+> caso usa il commit come versione e non guarda le release. Si risolve una
+> volta sola con **HACS → ⋮ → Riscarica**, scegliendo esplicitamente
+> l'ultima versione dall'elenco.
+>
+> Da parte del repository, `hide_default_branch` in `hacs.json` impedisce
+> che qualcuno finisca sul ramo per sbaglio.
+
 ## Configurazione
 
 Al primo avvio servono posizione e quota (precompilate da quelle di Home
