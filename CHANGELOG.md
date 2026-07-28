@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-28
+
 ### Aggiunto
 - **Scheda Log**: registro delle attività con avvii, irrigazioni concluse e
   soprattutto le linee **non** partite, col motivo. Vive in un file di
@@ -30,6 +32,17 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
   un clic
 
 ### Corretto
+- **Il form delle zone era inutilizzabile**: le tendine non cambiavano mai
+  selezione, perché `ha-select` costruita da HTML non registra le proprie
+  voci in tutte le versioni del frontend. Ora tutte le tendine sono
+  controlli nativi, vestiti col tema: più sobri, ma funzionanti ovunque
+- **Le entità si scelgono da un elenco**, non si scrivono più a mano:
+  valvola della linea (domini `switch`, `valve`, `input_boolean`) e
+  flussostato (sensori di portata) mostrano le entità reali col loro nome.
+  Un'entità che non esiste più resta selezionata e viene marcata
+- La lettura dei campi ricade sul controllo nativo interno quando un
+  componente non espone il valore: un salvataggio non può più perdersi
+  in silenzio
 - La validazione automatica falliva da sempre, su tutti e tre i controlli,
   quindi nessun problema veniva mai segnalato:
   - `hassfest` pretende le chiavi del manifest nell'ordine `domain`, `name`
