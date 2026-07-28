@@ -249,6 +249,24 @@ class IrrigazioneStore:
         self._save()
         return zone
 
+    def async_reorder_zones(self, ordered_ids: list[str]) -> bool:
+        """Riscrive la sequenza secondo l'ordine ricevuto.
+
+        Gli id sconosciuti si ignorano e quelli mancanti restano in coda:
+        un riordino non deve mai far sparire una linea.
+        """
+        zones = self._data["zones"]
+        seen = [zid for zid in ordered_ids if zid in zones]
+        if not seen:
+            return False
+
+        rest = [z["id"] for z in self.zones_sorted() if z["id"] not in seen]
+        for position, zone_id in enumerate(seen + rest, start=1):
+            zones[zone_id]["order"] = position
+
+        self._save()
+        return True
+
     def async_move_zone(self, zone_id: str, direction: int) -> bool:
         """Sposta una linea su (-1) o giù (+1) nella sequenza.
 

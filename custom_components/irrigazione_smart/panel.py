@@ -340,6 +340,29 @@ class ZoneDetailView(HomeAssistantView):
         return self.json({"overview": _build_overview(hass)})
 
 
+class ZoneReorderView(HomeAssistantView):
+    """Nuova sequenza completa, dopo un riordino per trascinamento."""
+
+    url = "/api/irrigazione_smart/zones/reorder"
+    name = "api:irrigazione_smart:zone_reorder"
+    requires_auth = True
+
+    async def post(self, request):
+        _require_admin(request)
+        hass: HomeAssistant = request.app["hass"]
+        store = _get_store(hass)
+        if store is None:
+            return self.json_message("Integration non configurata", 400)
+
+        payload = await request.json()
+        order = payload.get("order") or []
+        if not isinstance(order, list) or not store.async_reorder_zones(order):
+            return self.json_message("Ordine non valido", 400)
+
+        _notify(hass)
+        return self.json({"overview": _build_overview(hass)})
+
+
 class ZoneMoveView(HomeAssistantView):
     """Spostamento di una linea nella sequenza."""
 
@@ -570,6 +593,8 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
         )
         hass.http.register_view(OverviewView())
         hass.http.register_view(ZonesView())
+        # prima di ZoneDetailView: `/zones/{zone_id}` catturerebbe "reorder"
+        hass.http.register_view(ZoneReorderView())
         hass.http.register_view(ZoneDetailView())
         hass.http.register_view(SystemView())
         hass.http.register_view(ZoneMoveView())

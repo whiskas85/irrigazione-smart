@@ -8,6 +8,16 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Aggiunto
+- **Riordino delle linee per trascinamento**, con maniglia dedicata: la
+  riga segue il puntatore e la nuova sequenza si salva al rilascio.
+  Sostituisce i pulsanti su/giù
+- **Registro diviso per giornata**, con "Oggi" e "Ieri" al posto della
+  data, e l'ora sulla sinistra di ogni riga
+- **Ricerca nel registro** e filtro per periodo (oggi, 7 giorni, 30 giorni,
+  tutto), con il conteggio delle voci mostrate. Il valore predefinito è
+  **ultimi 7 giorni**
+
 ## [0.4.0] - 2026-07-28
 
 ### Aggiunto

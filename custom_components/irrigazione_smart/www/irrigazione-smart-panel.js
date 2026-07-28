@@ -359,12 +359,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
     onClick(".run-zone", (e) =>
       this._openForceDialog(e.currentTarget.getAttribute("data-id"))
     );
-    onClick(".move-zone", (e) => {
-      const el = e.currentTarget;
-      this._mutate("POST", `zones/${el.getAttribute("data-id")}/move`, {
-        direction: el.getAttribute("data-dir"),
-      });
-    });
+    this._bindDragReorder();
     onClick(".add-item", (e) =>
       this._openItemDialog(e.currentTarget.getAttribute("data-kind"), null)
     );
@@ -418,6 +413,29 @@ class IrrigazioneSmartPanel extends HTMLElement {
       );
     });
 
+    // ricerca nel registro: si ridisegna solo la lista, senza perdere il
+    // cursore dentro al campo
+    const search = sr.querySelector(".log-search");
+    if (search) {
+      search.addEventListener("input", (e) => {
+        this._logQuery = e.target.value;
+        const pos = e.target.selectionStart;
+        this._render();
+        const again = this.shadowRoot.querySelector(".log-search");
+        if (again) {
+          again.focus();
+          again.setSelectionRange(pos, pos);
+        }
+      });
+    }
+    const range = sr.querySelector(".log-range");
+    if (range) {
+      range.addEventListener("change", (e) => {
+        this._logDays = Number(e.target.value);
+        this._render();
+      });
+    }
+
     onClick(".clear-log", async () => {
       try {
         await this._api("DELETE", "log");
@@ -442,6 +460,58 @@ class IrrigazioneSmartPanel extends HTMLElement {
           enabled: !!e.target.checked,
         })
       );
+    });
+  }
+
+  /* Riordino per trascinamento della maniglia.
+     La riga trascinata viene spostata subito nel DOM per dare riscontro
+     immediato; l'ordine definitivo si invia solo al rilascio. */
+  _bindDragReorder() {
+    const sr = this.shadowRoot;
+    const handles = sr.querySelectorAll("[data-drag]");
+    if (!handles.length) return;
+
+    let draggedId = null;
+
+    const rowOf = (id) => sr.querySelector(`[data-zone-row="${id}"]`);
+
+    handles.forEach((handle) => {
+      const row = handle.closest("[data-zone-row]");
+
+      handle.addEventListener("dragstart", (ev) => {
+        draggedId = handle.getAttribute("data-drag");
+        row.classList.add("dragging");
+        ev.dataTransfer.effectAllowed = "move";
+        // Firefox non avvia il trascinamento senza dati impostati
+        ev.dataTransfer.setData("text/plain", draggedId);
+      });
+
+      handle.addEventListener("dragend", () => {
+        row.classList.remove("dragging");
+        draggedId = null;
+      });
+    });
+
+    sr.querySelectorAll("[data-zone-row]").forEach((row) => {
+      row.addEventListener("dragover", (ev) => {
+        if (!draggedId) return;
+        ev.preventDefault();
+        const dragged = rowOf(draggedId);
+        if (!dragged || dragged === row) return;
+
+        // sopra o sotto, secondo la metà della riga in cui si è
+        const box = row.getBoundingClientRect();
+        const after = ev.clientY > box.top + box.height / 2;
+        row.parentNode.insertBefore(dragged, after ? row.nextSibling : row);
+      });
+
+      row.addEventListener("drop", (ev) => {
+        ev.preventDefault();
+        const order = [...sr.querySelectorAll("[data-zone-row]")].map((r) =>
+          r.getAttribute("data-zone-row")
+        );
+        this._mutate("POST", "zones/reorder", { order });
+      });
     });
   }
 
@@ -625,36 +695,91 @@ class IrrigazioneSmartPanel extends HTMLElement {
     this._render();
   }
 
+  /* Intestazione di giornata: "Oggi" e "Ieri" si leggono meglio di una
+     data, quando si sta cercando cos'è successo stanotte. */
+  _dayLabel(date) {
+    const today = new Date();
+    const sameDay = (a, b) =>
+      a.getDate() === b.getDate() &&
+      a.getMonth() === b.getMonth() &&
+      a.getFullYear() === b.getFullYear();
+
+    if (sameDay(date, today)) return "Oggi";
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    if (sameDay(date, yesterday)) return "Ieri";
+
+    return date.toLocaleDateString("it-IT", {
+      weekday: "long", day: "numeric", month: "long",
+    });
+  }
+
   _logTab() {
     if (this._log === undefined) {
       this._fetchLog();
       return `<div class="empty">Caricamento…</div>`;
     }
-    if (!this._log.length) {
-      return `<ha-card><div class="inner">
-        <div class="card-head"><ha-icon icon="mdi:format-list-bulleted"></ha-icon><h2>Attività</h2></div>
-        <div class="empty-state">
-          <ha-icon icon="mdi:history"></ha-icon>
-          <p>Nessuna attività registrata.</p>
-          <p class="muted small">Qui finiscono avvii, irrigazioni concluse e linee non partite.</p>
-        </div>
-      </div></ha-card>`;
-    }
 
-    const rows = this._log.map((e) => {
+    const days = this._logDays ?? 7;
+    const query = (this._logQuery || "").trim().toLowerCase();
+
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    cutoff.setHours(0, 0, 0, 0);
+
+    const filtered = this._log.filter((e) => {
       const d = new Date(e.ts);
-      const two = (n) => String(n).padStart(2, "0");
-      const when = isNaN(d)
-        ? ""
-        : `${two(d.getDate())}/${two(d.getMonth() + 1)} ${two(d.getHours())}:${two(d.getMinutes())}`;
-      return `<div class="row log-row lv-${esc(e.level)}">
-        <ha-icon icon="${LOG_ICONS[e.kind] || "mdi:information-outline"}"></ha-icon>
-        <div class="row-main">
-          <span class="row-label">${esc(e.text)}</span>
-          <span class="sub">${esc(when)}</span>
-        </div>
-      </div>`;
-    }).join("");
+      if (!isNaN(d) && days > 0 && d < cutoff) return false;
+      return !query || (e.text || "").toLowerCase().includes(query);
+    });
+
+    // raggruppamento per giornata, mantenendo l'ordine (più recente prima)
+    const groups = [];
+    filtered.forEach((entry) => {
+      const d = new Date(entry.ts);
+      const key = isNaN(d) ? "?" : d.toDateString();
+      let group = groups.find((g) => g.key === key);
+      if (!group) {
+        group = { key, label: isNaN(d) ? "Data ignota" : this._dayLabel(d), items: [] };
+        groups.push(group);
+      }
+      group.items.push(entry);
+    });
+
+    const two = (n) => String(n).padStart(2, "0");
+    const body = groups.length
+      ? groups
+          .map(
+            (g) => `<div class="log-day">${esc(g.label)}</div>
+        ${g.items
+          .map((e) => {
+            const d = new Date(e.ts);
+            const when = isNaN(d) ? "" : `${two(d.getHours())}:${two(d.getMinutes())}`;
+            return `<div class="row log-row lv-${esc(e.level)}">
+              <span class="log-time">${esc(when)}</span>
+              <ha-icon icon="${LOG_ICONS[e.kind] || "mdi:information-outline"}"></ha-icon>
+              <div class="row-main"><span class="row-label">${esc(e.text)}</span></div>
+            </div>`;
+          })
+          .join("")}`
+          )
+          .join("")
+      : `<div class="empty-state">
+           <ha-icon icon="mdi:history"></ha-icon>
+           <p>${this._log.length ? "Nessun risultato." : "Nessuna attività registrata."}</p>
+           <p class="muted small">${
+             this._log.length
+               ? "Prova ad allargare il periodo o a cambiare la ricerca."
+               : "Qui finiscono avvii, irrigazioni concluse e linee non partite."
+           }</p>
+         </div>`;
+
+    const ranges = [
+      { value: 1, label: "Oggi" },
+      { value: 7, label: "Ultimi 7 giorni" },
+      { value: 30, label: "Ultimi 30 giorni" },
+      { value: 0, label: "Tutto" },
+    ];
 
     return `<ha-card><div class="inner">
       <div class="card-head">
@@ -663,7 +788,22 @@ class IrrigazioneSmartPanel extends HTMLElement {
         <span class="spacer"></span>
         ${this._button("clear-log", "Svuota")}
       </div>
-      ${rows}
+
+      <div class="log-tools">
+        <input class="native log-search" type="search" placeholder="Cerca nel registro…"
+               value="${esc(this._logQuery || "")}">
+        <select class="native log-range">
+          ${ranges
+            .map(
+              (r) =>
+                `<option value="${r.value}"${r.value === days ? " selected" : ""}>${r.label}</option>`
+            )
+            .join("")}
+        </select>
+      </div>
+      <p class="muted small nomargin">${filtered.length} di ${this._log.length} voci</p>
+
+      ${body}
     </div></ha-card>`;
   }
 
@@ -945,11 +1085,11 @@ class IrrigazioneSmartPanel extends HTMLElement {
       ? `<span class="chip"><ha-icon icon="mdi:valve"></ha-icon>${esc(z.valve_entity)}</span>`
       : `<span class="chip warnchip"><ha-icon icon="mdi:valve"></ha-icon>nessuna valvola</span>`;
 
-    const zones = this._overview.zones || [];
-    const index = zones.findIndex((x) => x.id === z.id);
-
-    return `<div class="zone${z.enabled ? "" : " dim"}">
+    return `<div class="zone${z.enabled ? "" : " dim"}" data-zone-row="${z.id}">
       <div class="zone-head">
+        <span class="drag-handle" draggable="true" data-drag="${z.id}" title="Trascina per riordinare">
+          <ha-icon icon="mdi:drag-horizontal-variant"></ha-icon>
+        </span>
         <ha-switch data-zone-toggle="${z.id}" ${z.enabled ? "checked" : ""}></ha-switch>
         <ha-icon class="zone-icon" icon="${esc(z.icon || ZONE_TYPE_ICONS[z.zone_type] || "mdi:sprinkler")}"></ha-icon>
         <div class="zone-title">
@@ -957,16 +1097,6 @@ class IrrigazioneSmartPanel extends HTMLElement {
           <span class="sub">${esc(label(ZONE_TYPE_LABELS, z.zone_type))} · ${esc(label(SOIL_LABELS, c.soil))} · ${esc(label(EMITTER_LABELS, z.emitter))}</span>
         </div>
         ${status}
-        <div class="order-btns">
-          <ha-icon-button class="move-zone" data-id="${z.id}" data-dir="up"
-            label="Sposta su"${index === 0 ? " disabled" : ""}>
-            <ha-icon icon="mdi:chevron-up"></ha-icon>
-          </ha-icon-button>
-          <ha-icon-button class="move-zone" data-id="${z.id}" data-dir="down"
-            label="Sposta giù"${index === zones.length - 1 ? " disabled" : ""}>
-            <ha-icon icon="mdi:chevron-down"></ha-icon>
-          </ha-icon-button>
-        </div>
         <ha-icon-button class="edit-zone" data-id="${z.id}" label="Modifica">
           <ha-icon icon="mdi:pencil"></ha-icon>
         </ha-icon-button>
@@ -1750,10 +1880,25 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .dot.st-watering { background: var(--info-color, var(--primary-color));
                          animation: pulse 1.6s ease-in-out infinite; }
 
-      .order-btns { display: flex; flex-direction: column; }
-      .order-btns ha-icon-button { --mdc-icon-size: 18px; padding: 0; }
-      .order-btns ha-icon-button[disabled] { opacity: .3; pointer-events: none; }
       .zone-icon { color: var(--state-icon-color, var(--secondary-text-color)); }
+
+      /* maniglia di trascinamento per riordinare le linee */
+      .drag-handle { display: inline-flex; align-items: center; cursor: grab;
+                     color: var(--disabled-text-color); flex: 0 0 auto; touch-action: none; }
+      .drag-handle:active { cursor: grabbing; }
+      .drag-handle:hover { color: var(--secondary-text-color); }
+      .zone.dragging { opacity: .5; background: var(--secondary-background-color);
+                       border-radius: 8px; }
+
+      /* strumenti del registro */
+      .log-tools { display: flex; gap: 8px; margin: 4px 0 8px; flex-wrap: wrap; }
+      .log-tools .log-search { flex: 1 1 200px; }
+      .log-tools .log-range { flex: 0 0 auto; width: auto; }
+      .log-day { font-size: 12px; font-weight: 600; text-transform: uppercase;
+                 letter-spacing: .04em; color: var(--secondary-text-color);
+                 margin: 16px 0 2px; }
+      .log-time { font-size: 12px; color: var(--secondary-text-color);
+                  min-width: 38px; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
 
       .log-row.lv-warning > ha-icon { color: var(--warning-color, #ffa600); }
       .log-row.lv-error > ha-icon { color: var(--error-color, #db4437); }
