@@ -8,6 +8,18 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-07-28
+
+### Corretto
+- **Chi installava dal ramo non riceveva mai la notifica di aggiornamento.**
+  HACS ricava la versione dal tag dell'ultima release, ma per un
+  repository seguito *per ramo* usa l'ultimo commit e le release non le
+  guarda proprio: capitava a chi aveva installato prima che esistesse il
+  primo tag. Con `hide_default_branch` il ramo non è più offerto in
+  download, quindi nessuno può finire in quello stato
+- Il README spiega come uscirne se ci si è già finiti: una sola
+  riscaricata da HACS scegliendo la versione
+
 ## [0.7.2] - 2026-07-28
 
 ### Corretto
