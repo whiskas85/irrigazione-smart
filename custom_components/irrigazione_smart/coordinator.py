@@ -109,6 +109,50 @@ class IrrigazioneCoordinator(DataUpdateCoordinator):
             return None
         return _as_float(state.attributes.get(attr))
 
+    async def _fetch_forecast(self) -> dict[str, Any]:
+        """Pioggia prevista dal servizio meteo configurato.
+
+        Serve alla guardia che salta l'irrigazione quando sta per piovere:
+        senza questa lettura la soglia esiste ma non può mai scattare.
+        Si chiede la previsione giornaliera e si guarda solo oggi: la
+        pioggia di dopodomani non deve impedire di irrigare stanotte.
+        """
+        entity_id = self._entry.data.get(CONF_WEATHER_ENTITY)
+        if not entity_id or self._state(entity_id) is None:
+            return {"available": False}
+
+        try:
+            response = await self.hass.services.async_call(
+                "weather",
+                "get_forecasts",
+                {"entity_id": entity_id, "type": "daily"},
+                blocking=True,
+                return_response=True,
+            )
+        except Exception:
+            # un servizio meteo che non risponde non deve fermare il resto
+            # del ciclo: si prosegue senza previsione
+            _LOGGER.debug("Previsioni non disponibili da %s", entity_id)
+            return {"available": False}
+
+        forecasts = ((response or {}).get(entity_id) or {}).get("forecast") or []
+        if not forecasts:
+            return {"available": False}
+
+        today = forecasts[0]
+        rain = _as_float(today.get("precipitation"))
+        probability = _as_float(today.get("precipitation_probability"))
+
+        return {
+            "available": True,
+            "entity_id": entity_id,
+            "rain_mm": rain if rain is not None else 0.0,
+            "probability": probability,
+            "condition": today.get("condition"),
+            "t_min": _as_float(today.get("templow")),
+            "t_max": _as_float(today.get("temperature")),
+        }
+
     def _read_sources(self) -> dict[str, Any]:
         """Misure correnti, con provenienza per ogni grandezza.
 
@@ -289,9 +333,13 @@ class IrrigazioneCoordinator(DataUpdateCoordinator):
         daily["last_update"] = now.isoformat()
         self._store.async_save_daily(daily)
 
+        forecast = await self._fetch_forecast()
+
         wind_ms = live.get("wind_ms")
         return {
             "live": live,
             "daily": daily,
+            "forecast": forecast,
+            "rain_forecast_mm": float(forecast.get("rain_mm") or 0.0),
             "wind_kmh": wind_ms * 3.6 if wind_ms is not None else 0.0,
         }

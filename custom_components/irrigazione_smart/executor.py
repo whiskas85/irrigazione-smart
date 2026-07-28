@@ -94,6 +94,19 @@ class IrrigationExecutor:
 
     # ------------------------------------------------------------ valvole
 
+    def _live_guards(self) -> dict[str, float]:
+        """Vento e pioggia prevista correnti, per le guardie meteo.
+
+        Li tiene il coordinator: senza passarli qui, la sequenza
+        automatica irrigherebbe anche col temporale in arrivo.
+        """
+        coordinator = self._hass.data.get(DOMAIN, {}).get("coordinator")
+        data = (coordinator.data if coordinator else None) or {}
+        return {
+            "wind_kmh": float(data.get("wind_kmh") or 0.0),
+            "rain_forecast_mm": float(data.get("rain_forecast_mm") or 0.0),
+        }
+
     def _flow_value(self) -> float | None:
         """Lettura del flussostato, se configurato. Solo informativa."""
         entity_id = self._store.system.get("flow_entity")
@@ -219,7 +232,12 @@ class IrrigationExecutor:
         for zone in self._store.zones_sorted():
             if category and zone_category(zone.get("zone_type")) != category:
                 continue
-            plan = evaluate_zone(zone, system, float(zone.get("deficit_mm") or 0.0))
+            plan = evaluate_zone(
+                zone,
+                system,
+                float(zone.get("deficit_mm") or 0.0),
+                **self._live_guards(),
+            )
             if plan.should_run:
                 queue.append((zone["id"], None))
 
@@ -348,7 +366,9 @@ class IrrigationExecutor:
 
         # durata: quella forzata dall'utente, o quella calcolata dal motore
         if minutes is None:
-            plan = evaluate_zone(zone, system, deficit)
+            plan = evaluate_zone(
+                zone, system, deficit, **self._live_guards()
+            )
             if not plan.should_run:
                 _LOGGER.info("Linea %s saltata: %s", zone.get("name"), plan.reason)
                 self._fire_failed(zone_id, zone, plan.reason)

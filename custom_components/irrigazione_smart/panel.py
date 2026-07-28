@@ -142,6 +142,7 @@ def _build_overview(hass: HomeAssistant) -> dict[str, Any]:
     coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
     cdata = (coordinator.data if coordinator else None) or {}
     wind_kmh = float(cdata.get("wind_kmh") or 0.0)
+    rain_forecast_mm = float(cdata.get("rain_forecast_mm") or 0.0)
     executor = get_executor(hass)
 
     system = store.system
@@ -167,6 +168,7 @@ def _build_overview(hass: HomeAssistant) -> dict[str, Any]:
             system,
             float(zone.get("deficit_mm") or 0.0),
             wind_kmh=wind_kmh,
+            rain_forecast_mm=rain_forecast_mm,
             day_excluded=(
                 not group.get("enabled", True)
                 or today_key not in (group.get("days") or [])
@@ -338,6 +340,7 @@ def _meteo_payload(cdata: dict[str, Any], store: IrrigazioneStore) -> dict[str, 
         "last_closed_date": daily.get("last_closed_date"),
         "last_update": daily.get("last_update"),
         "sources": live.get("sources") or {},
+        "forecast": cdata.get("forecast") or {"available": False},
     }
 
 
@@ -473,6 +476,50 @@ class LogView(HomeAssistantView):
         if activity is not None:
             activity.clear()
         return self.json({"entries": []})
+
+
+class SourcesView(HomeAssistantView):
+    """Modifica delle sorgenti dati meteo dal pannello.
+
+    Vivono nella config entry, non nello storage: si aggiorna quella, e
+    Home Assistant ricarica l'integration da sola.
+    """
+
+    url = "/api/irrigazione_smart/sources"
+    name = "api:irrigazione_smart:sources"
+    requires_auth = True
+
+    FIELDS = (
+        CONF_WEATHER_ENTITY,
+        CONF_TEMPERATURE_ENTITY,
+        CONF_HUMIDITY_ENTITY,
+        CONF_WIND_ENTITY,
+        CONF_RAIN_ENTITY,
+        CONF_IRRADIANCE_ENTITY,
+    )
+
+    async def post(self, request):
+        _require_admin(request)
+        hass: HomeAssistant = request.app["hass"]
+        entries = hass.config_entries.async_entries(DOMAIN)
+        if not entries:
+            return self.json_message("Integration non configurata", 400)
+
+        payload = await request.json()
+        entry = entries[0]
+        data = dict(entry.data)
+
+        for field in self.FIELDS:
+            if field in payload:
+                value = payload[field]
+                # campo svuotato = sorgente rimossa
+                if value:
+                    data[field] = value
+                else:
+                    data.pop(field, None)
+
+        hass.config_entries.async_update_entry(entry, data=data)
+        return self.json({"ok": True})
 
 
 class GroupView(HomeAssistantView):
@@ -691,6 +738,7 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
         hass.http.register_view(SystemView())
         hass.http.register_view(ZoneMoveView())
         hass.http.register_view(LogView())
+        hass.http.register_view(SourcesView())
         hass.http.register_view(GroupView())
         hass.http.register_view(ItemsView())
         hass.http.register_view(ItemDetailView())

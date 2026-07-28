@@ -436,6 +436,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
       this._confirmDelete(e.currentTarget.getAttribute("data-id"))
     );
     onClick(".edit-system", () => this._openSystemDialog());
+    onClick(".edit-sources", () => this._openSourcesDialog());
     onClick(".retry", () => this._fetchOverview());
     onClick(".run-all", () => this._mutate("POST", "run", {}));
     onClick(".run-group", (e) =>
@@ -1557,7 +1558,57 @@ class IrrigazioneSmartPanel extends HTMLElement {
   // ------------------------------------------------------------- METEO
 
   _meteoTab() {
-    return `${this._et0Card()}${this._sensorsCard(this._overview.system)}${this._locationCard(this._overview.system)}`;
+    return `${this._et0Card()}
+      ${this._forecastCard()}
+      ${this._sensorsCard(this._overview.system)}
+      ${this._locationCard(this._overview.system)}`;
+  }
+
+  /* Pioggia prevista: è la lettura che fa saltare l'irrigazione quando
+     sta per piovere, quindi va mostrata insieme alla soglia. */
+  _forecastCard() {
+    const f = (this._overview.meteo || {}).forecast || {};
+    const sys = this._overview.system || {};
+    const soglia = Number(sys.rain_forecast_max_mm ?? 8);
+
+    if (!f.available) {
+      return `<ha-card><div class="inner">
+        <div class="card-head">
+          <ha-icon icon="mdi:weather-pouring"></ha-icon>
+          <h2>Pioggia prevista</h2>
+        </div>
+        <p class="muted small nomargin">
+          ${
+            sys.weather_entity
+              ? "Il servizio meteo configurato non fornisce previsioni giornaliere."
+              : "Nessun servizio meteo configurato: senza previsioni, l'irrigazione non può essere sospesa in vista della pioggia."
+          }
+        </p>
+      </div></ha-card>`;
+    }
+
+    const rain = Number(f.rain_mm || 0);
+    const blocca = rain > soglia;
+
+    return `<ha-card><div class="inner">
+      <div class="card-head">
+        <ha-icon icon="mdi:weather-pouring"></ha-icon>
+        <h2>Pioggia prevista</h2>
+        <span class="spacer"></span>
+        <span class="badge ${blocca ? "warn" : "ok"}">
+          ${blocca ? "irrigazione sospesa" : "sotto soglia"}
+        </span>
+      </div>
+      <div class="et0">
+        <div class="et0-value"><b>${rain.toFixed(1)}</b> <span>mm</span></div>
+        <div class="et0-meta">
+          <span class="row-label">previsti oggi${
+            f.probability != null ? ` · ${Math.round(f.probability)}% di probabilità` : ""
+          }</span>
+          <span class="sub">oltre ${soglia} mm l'irrigazione viene saltata</span>
+        </div>
+      </div>
+    </div></ha-card>`;
   }
 
   _et0Card() {
@@ -1637,15 +1688,78 @@ class IrrigazioneSmartPanel extends HTMLElement {
     }).join("");
 
     return `<ha-card><div class="inner">
-        <div class="card-head"><ha-icon icon="mdi:gauge"></ha-icon><h2>Sorgenti dati</h2></div>
+        <div class="card-head">
+          <ha-icon icon="mdi:gauge"></ha-icon>
+          <h2>Sorgenti dati</h2>
+          <span class="spacer"></span>
+          ${this._button("edit-sources", "Modifica")}
+        </div>
         ${rows}
         <div class="row">
           <ha-icon icon="mdi:weather-partly-cloudy"></ha-icon>
-          <div class="row-main"><span class="row-label">Meteo di fallback</span></div>
+          <div class="row-main">
+            <span class="row-label">Meteo di fallback</span>
+            <span class="sub">usato dove manca il sensore locale, e per le previsioni</span>
+          </div>
           ${hasWeather ? `<span class="reading small">${esc(sys.weather_entity)}</span>` : `<span class="badge muted">nessuno</span>`}
         </div>
-        <p class="muted small note">Le sorgenti si cambiano da Impostazioni → Dispositivi e servizi → Irrigazione Smart.</p>
       </div></ha-card>`;
+  }
+
+  _openSourcesDialog() {
+    const sys = this._overview.system || {};
+    const sensors = sys.sensors || {};
+
+    const specs = [
+      {
+        key: "weather_entity", label: "Servizio meteo", type: "entity",
+        domains: ["weather"],
+        helper: "Usato dove manca il sensore locale, e per la pioggia prevista",
+      },
+      { type: "section", label: "Sensori locali (hanno la precedenza)" },
+      {
+        key: "temperature_entity", label: "Temperatura", type: "entity",
+        domains: ["sensor"],
+      },
+      {
+        key: "humidity_entity", label: "Umidità", type: "entity",
+        domains: ["sensor"],
+        helper: "Con umidità e vento si usa Penman-Monteith invece di Hargreaves",
+      },
+      { key: "wind_entity", label: "Vento", type: "entity", domains: ["sensor"] },
+      {
+        key: "rain_entity", label: "Pioggia caduta", type: "entity",
+        domains: ["sensor"], helper: "Pluviometro: millimetri cumulati nella giornata",
+      },
+      {
+        key: "irradiance_entity", label: "Irraggiamento", type: "entity",
+        domains: ["sensor"],
+        helper: "Piranometro in W/m². Senza, viene stimato dall'escursione termica",
+      },
+    ];
+
+    this._showForm(
+      "Sorgenti dati",
+      specs,
+      {
+        weather_entity: sys.weather_entity || undefined,
+        temperature_entity: sensors.temperature || undefined,
+        humidity_entity: sensors.humidity || undefined,
+        wind_entity: sensors.wind_speed || undefined,
+        rain_entity: sensors.precipitation || undefined,
+        irradiance_entity: sensors.irradiance || undefined,
+      },
+      async (values) => {
+        try {
+          await this._api("POST", "sources", values);
+          // il cambio ricarica l'integration: si rilegge tutto da capo
+          setTimeout(() => this._fetchOverview(), 1500);
+        } catch (err) {
+          this._error = (err && err.message) || String(err);
+          this._render();
+        }
+      }
+    );
   }
 
   _locationCard(sys) {

@@ -8,6 +8,22 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Corretto
+- **Il blocco per pioggia prevista non poteva scattare.** La soglia era
+  configurabile e la pagina la mostrava, ma nessuno leggeva mai le
+  previsioni: `rain_forecast_mm` restava sempre 0. Ora il coordinator
+  interroga il servizio meteo configurato (`weather.get_forecasts`) e usa
+  la pioggia prevista **per oggi** — quella di dopodomani non deve
+  impedire di irrigare stanotte. Se il servizio non risponde, il resto del
+  ciclo prosegue senza previsione
+
+### Aggiunto
+- **Sorgenti dati modificabili dal pannello**: servizio meteo e i cinque
+  sensori locali si scelgono dalla scheda Meteo, senza passare da
+  Impostazioni → Dispositivi e servizi
+- Card **Pioggia prevista** con i millimetri attesi oggi, la probabilità e
+  l'indicazione se superano la soglia che sospende l'irrigazione
+
 ## [0.7.4] - 2026-07-28
 
 ### Note
