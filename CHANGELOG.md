@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-28
+
 ### Aggiunto
 - **Notifiche e azioni** (scheda *Azioni*), sul modello di Alarmo:
   - le notifiche non sono cablate su `notify`: chiami il servizio che
