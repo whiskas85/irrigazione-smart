@@ -159,6 +159,14 @@ HACS legge i tag per sapere cosa è disponibile e il manifest per sapere
 cosa è installato. La GitHub Action di release blocca il push se
 divergono.
 
+> **Un push su `main` non produce un aggiornamento.** HACS installa
+> l'ultima *release*, non l'ultimo commit: finché non si crea un tag, chi
+> aggiorna da HACS continua a ricevere la versione precedente, anche se il
+> codice nuovo è già su GitHub. Il bump serve anche al frontend: il
+> pannello è servito con la versione nell'URL, quindi cambiarla è ciò che
+> costringe il browser a ricaricare il JavaScript invece di riusare quello
+> in cache.
+
 L'architettura completa è in **[SPEC.md](SPEC.md)**.
 
 ## Crediti
