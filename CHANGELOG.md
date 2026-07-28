@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-07-28
+
 ### Aggiunto
 - **Il pannello si accorge se manca il riavvio.** Aggiornando da HACS i
   file cambiano su disco e il browser rilegge subito il JavaScript nuovo,
