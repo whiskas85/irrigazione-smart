@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-07-28
+
 ### Aggiunto
 - **Il bilancio idrico si aggiorna durante la giornata, non solo a
   mezzanotte.** Con 30 gradi il prato consuma acqua dalla mattina, ma il
