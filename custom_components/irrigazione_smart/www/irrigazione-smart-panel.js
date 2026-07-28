@@ -900,7 +900,10 @@ class IrrigazioneSmartPanel extends HTMLElement {
     const ora = `${two(d.getHours())}:${two(d.getMinutes())}`;
     if (next.today) return { text: `oggi alle ${ora}`, ok: true };
     const giorno = d.toLocaleDateString("it-IT", { weekday: "long" });
-    return { text: `${giorno} alle ${ora}`, ok: true };
+    // Saltare a domani senza dire perché sembrava un errore: l'avvio
+    // automatico è uno al giorno, e oggi è già stato speso.
+    const nota = next.already_ran ? " (oggi è già partita)" : "";
+    return { text: `${giorno} alle ${ora}${nota}`, ok: true };
   }
 
   _groupTab(category) {
@@ -2009,7 +2012,8 @@ class IrrigazioneSmartPanel extends HTMLElement {
     const num = (v, unit, dec = 1) =>
       v == null ? "—" : `${Number(v).toFixed(dec)}${unit ? " " + unit : ""}`;
     const et0 = m.last_et0_mm;
-    const method = ET0_METHOD_LABELS[m.last_et0_method] || m.last_et0_method || "";
+    const rawMethod = m.et0_today_method || m.last_et0_method;
+    const method = ET0_METHOD_LABELS[rawMethod] || rawMethod || "";
     const when = m.last_update ? new Date(m.last_update) : null;
     const hhmm = when
       ? `${String(when.getHours()).padStart(2, "0")}:${String(when.getMinutes()).padStart(2, "0")}`
@@ -2022,19 +2026,27 @@ class IrrigazioneSmartPanel extends HTMLElement {
           <span class="spacer"></span>
           <span class="sub">aggiornato ${hhmm}</span>
         </div>
+        <div class="et0">
+          <div class="et0-value"><b>${Number(m.et0_today_mm || 0).toFixed(2)}</b> <span>mm</span></div>
+          <div class="et0-meta">
+            <span class="row-label">ET0 maturata oggi</span>
+            <span class="sub">
+              cresce dall'alba al tramonto e si scarica sui deficit a ogni
+              aggiornamento${
+                et0 == null
+                  ? ""
+                  : ` · ${esc(m.last_closed_date || "giorno precedente")}: ${Number(et0).toFixed(2)} mm`
+              }
+            </span>
+          </div>
+        </div>
         ${
           et0 == null
             ? `<ha-alert alert-type="info">
-                 Nessun giorno ancora chiuso. L'ET0 viene calcolato dopo la
-                 mezzanotte, sui dati accumulati nella giornata.
+                 Nessun giorno ancora chiuso: il totale definitivo, coi dati
+                 completi di temperatura, si calcola dopo la mezzanotte.
                </ha-alert>`
-            : `<div class="et0">
-                 <div class="et0-value"><b>${Number(et0).toFixed(2)}</b> <span>mm</span></div>
-                 <div class="et0-meta">
-                   <span class="row-label">ET0 del ${esc(m.last_closed_date || "")}</span>
-                   <span class="sub">${esc(method)}</span>
-                 </div>
-               </div>`
+            : ""
         }
         <div class="form-section">Accumulo di oggi</div>
         <div class="c-grid">
@@ -2043,6 +2055,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
           <div class="cell"><span class="k">Pioggia</span><span class="v">${num(m.rain_mm, "mm")}</span></div>
           <div class="cell"><span class="k">Umidità media</span><span class="v">${num(m.rh_mean, "%", 0)}</span></div>
           <div class="cell"><span class="k">Vento medio</span><span class="v">${num(m.wind_mean_kmh, "km/h")}</span></div>
+          <div class="cell"><span class="k">Metodo</span><span class="v">${esc(method || "—")}</span></div>
         </div>
       </div></ha-card>`;
   }

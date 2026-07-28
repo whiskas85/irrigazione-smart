@@ -89,6 +89,59 @@ ABSOLUTE_MAX_RUNTIME_MIN = 240.0
 # --------------------------------------------------------------------------
 
 
+def solar_declination(day_of_year: int) -> float:
+    """Declinazione solare δ in radianti (FAO-56 eq. 24)."""
+    return 0.409 * math.sin(2.0 * math.pi * day_of_year / 365.0 - 1.39)
+
+
+def sunset_hour_angle(latitude_deg: float, day_of_year: int) -> float:
+    """Angolo orario al tramonto ωs in radianti (FAO-56 eq. 25).
+
+    Il clamp serve alle latitudini polari, dove il sole non tramonta
+    (o non sorge) e la formula uscirebbe dal dominio dell'arcocoseno.
+    """
+    lat = math.radians(latitude_deg)
+    delta = solar_declination(day_of_year)
+    return math.acos(max(-1.0, min(1.0, -math.tan(lat) * math.tan(delta))))
+
+
+def daylight_hours(latitude_deg: float, day_of_year: int) -> float:
+    """Ore di luce del giorno (FAO-56 eq. 34)."""
+    return 24.0 / math.pi * sunset_hour_angle(latitude_deg, day_of_year)
+
+
+def et_fraction_elapsed(
+    latitude_deg: float, day_of_year: int, hour_of_day: float
+) -> float:
+    """Quota della domanda evapotraspirativa giornaliera già maturata.
+
+    ET0 è una grandezza *giornaliera*: aspettare mezzanotte per scaricarla
+    tutta insieme sul bilancio, però, significa mostrare per tutto il
+    giorno un deficit che non è più vero. Qui si distribuisce la giornata
+    sulla curva della radiazione — una semisinusoide fra alba e tramonto,
+    che integrata dà questa frazione cumulata. Di notte non cresce.
+
+    L'ora è quella locale trattata come ora solare vera: si trascura
+    l'equazione del tempo e lo scarto dal meridiano del fuso, che valgono
+    al più un'ora su una curva liscia. A fine giornata non conta comunque:
+    la chiusura del giorno ricalcola il totale esatto.
+    """
+    daylight = daylight_hours(latitude_deg, day_of_year)
+    if daylight <= 0.0:  # notte polare: nessuna domanda evaporativa
+        return 1.0
+    if daylight >= 24.0:  # sole di mezzanotte: si distribuisce sull'intero giorno
+        sunrise = 0.0
+        daylight = 24.0
+    else:
+        sunrise = 12.0 - daylight / 2.0
+
+    if hour_of_day <= sunrise:
+        return 0.0
+    if hour_of_day >= sunrise + daylight:
+        return 1.0
+    return (1.0 - math.cos(math.pi * (hour_of_day - sunrise) / daylight)) / 2.0
+
+
 def extraterrestrial_radiation(latitude_deg: float, day_of_year: int) -> float:
     """Radiazione extraterrestre Ra in MJ/m²/giorno (FAO-56 eq. 21).
 
@@ -97,11 +150,8 @@ def extraterrestrial_radiation(latitude_deg: float, day_of_year: int) -> float:
     lat = math.radians(latitude_deg)
     # distanza relativa inversa Terra-Sole
     dr = 1.0 + 0.033 * math.cos(2.0 * math.pi * day_of_year / 365.0)
-    # declinazione solare
-    delta = 0.409 * math.sin(2.0 * math.pi * day_of_year / 365.0 - 1.39)
-    # angolo orario al tramonto (clamp per latitudini polari)
-    ws_arg = max(-1.0, min(1.0, -math.tan(lat) * math.tan(delta)))
-    ws = math.acos(ws_arg)
+    delta = solar_declination(day_of_year)
+    ws = sunset_hour_angle(latitude_deg, day_of_year)
 
     return (
         (24.0 * 60.0 / math.pi)
@@ -469,6 +519,26 @@ def resolve_zone_params(
 # --------------------------------------------------------------------------
 
 
+def apply_water_balance(
+    previous_deficit_mm: float,
+    etc_mm: float,
+    water_mm: float,
+    params: ZoneParams,
+) -> float:
+    """Deficit(t) = Deficit(t-1) + ETc - acqua entrata nel terreno.
+
+    Vincolato tra 0 (capacità di campo: l'eccesso percola via) e TAW
+    (oltre, la pianta è in stress permanente e accumulare non ha senso).
+
+    Prende l'acqua già al netto dell'efficienza, perché chi aggiorna il
+    bilancio a piccoli passi durante la giornata deve poter calcolare la
+    pioggia efficace sul cumulato — la soglia dei 2 mm non è
+    additiva — e passare qui solo la differenza.
+    """
+    deficit = previous_deficit_mm + etc_mm - water_mm
+    return max(0.0, min(deficit, params.taw_mm))
+
+
 def update_deficit(
     previous_deficit_mm: float,
     et0_mm: float,
@@ -476,21 +546,13 @@ def update_deficit(
     rain_mm: float = 0.0,
     irrigation_mm: float = 0.0,
 ) -> float:
-    """Aggiorna il deficit idrico accumulato (il 'bucket').
-
-    Deficit(t) = Deficit(t-1) + ETc - Pioggia_efficace - Irrigazione
-
-    Vincolato tra 0 (capacità di campo: l'eccesso percola via) e TAW
-    (oltre, la pianta è in stress permanente e accumulare non ha senso).
-    """
-    etc = et0_mm * params.kc
-    deficit = (
-        previous_deficit_mm
-        + etc
-        - effective_rain(rain_mm)
-        - irrigation_mm
+    """Aggiorna il deficit idrico accumulato (il 'bucket') su base giornaliera."""
+    return apply_water_balance(
+        previous_deficit_mm,
+        et0_mm * params.kc,
+        effective_rain(rain_mm) + irrigation_mm,
+        params,
     )
-    return max(0.0, min(deficit, params.taw_mm))
 
 
 # --------------------------------------------------------------------------

@@ -84,6 +84,11 @@ class Et0Sensor(IrrigazioneEntity, SensorEntity):
             # sta girando il suo impianto
             "metodo": daily.get("last_et0_method"),
             "giorno": daily.get("last_closed_date"),
+            # quota di oggi già scaricata sul bilancio: sale ora per ora,
+            # ed è quella che spiega un deficit che cresce a metà pomeriggio
+            "et0_maturata_oggi_mm": round(
+                float(daily.get("et0_charged_mm") or 0.0), 2
+            ),
             "t_min_oggi": daily.get("t_min"),
             "t_max_oggi": daily.get("t_max"),
             "pioggia_oggi_mm": daily.get("rain_mm"),

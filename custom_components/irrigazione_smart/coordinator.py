@@ -34,7 +34,14 @@ from .const import (
     SIGNAL_STATE_CHANGED,
     UPDATE_INTERVAL_MIN,
 )
-from .hydro import compute_et0, resolve_zone_params, update_deficit
+from .hydro import (
+    Et0Result,
+    apply_water_balance,
+    compute_et0,
+    effective_rain,
+    et_fraction_elapsed,
+    resolve_zone_params,
+)
 from .store import DEFAULT_DAILY, IrrigazioneStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -242,8 +249,123 @@ class IrrigazioneCoordinator(DataUpdateCoordinator):
         if rain is not None:
             daily["rain_mm"] = max(float(daily.get("rain_mm") or 0.0), rain)
 
+    @property
+    def _latitude(self) -> float:
+        return float(self._entry.data.get(CONF_LATITUDE) or self.hass.config.latitude)
+
+    def _et0_of(
+        self, daily: dict[str, Any], t_min: float, t_max: float
+    ) -> Et0Result:
+        """ET0 della giornata coi dati accumulati finora."""
+        config = self._entry.data
+        rh_mean = daily["rh_sum"] / daily["rh_n"] if daily["rh_n"] else None
+        wind_mean = daily["wind_sum"] / daily["wind_n"] if daily["wind_n"] else None
+        solar_mj = None
+        if daily["irr_n"]:
+            # media W/m² sull'intera giornata → MJ/m²/giorno
+            solar_mj = (daily["irr_sum"] / daily["irr_n"]) * 0.0864
+
+        closed = dt_util.parse_date(daily["date"]) if daily.get("date") else None
+        reference = closed or dt_util.now()
+
+        return compute_et0(
+            t_min=t_min,
+            t_max=t_max,
+            latitude_deg=self._latitude,
+            day_of_year=reference.timetuple().tm_yday,
+            rh_mean=rh_mean,
+            wind_ms=wind_mean,
+            solar_radiation_mj=solar_mj,
+            elevation_m=float(config.get(CONF_ELEVATION) or 0.0),
+        )
+
+    def _charge(self, daily: dict[str, Any], et0_target_mm: float) -> bool:
+        """Scarica sul deficit la quota di giornata non ancora addebitata.
+
+        Si ragiona per differenze, non per totali: l'irrigazione scala il
+        deficit per conto suo mentre la giornata avanza, e ricalcolare da
+        capo cancellerebbe l'acqua appena erogata.
+
+        Il conto non torna mai indietro: se la stima cala — succede, perché
+        Tmin e Tmax si assestano solo a fine giornata — si lascia stare
+        invece di restituire acqua che la pianta ha già consumato.
+        """
+        charged = float(daily.get("et0_charged_mm") or 0.0)
+        rain_total = float(daily.get("rain_mm") or 0.0)
+        rain_charged = float(daily.get("rain_charged_mm") or 0.0)
+
+        et0_delta = max(0.0, et0_target_mm - charged)
+        # la pioggia utile non è proporzionale a quella caduta: si fa la
+        # differenza fra i due cumulati, non fra i millimetri grezzi
+        rain_delta = max(
+            0.0, effective_rain(rain_total) - effective_rain(rain_charged)
+        )
+        if et0_delta <= 0.0 and rain_delta <= 0.0:
+            return False
+
+        system = self._store.system
+        for zone_id, zone in self._store.zones.items():
+            params = resolve_zone_params(zone, system)
+            new_deficit = apply_water_balance(
+                float(zone.get("deficit_mm") or 0.0),
+                et0_delta * params.kc,
+                rain_delta,
+                params,
+            )
+            self._store.async_set_deficit(zone_id, new_deficit)
+
+        daily["et0_charged_mm"] = round(charged + et0_delta, 4)
+        daily["rain_charged_mm"] = max(rain_total, rain_charged)
+        return True
+
+    def _accrue(self, daily: dict[str, Any], forecast: dict[str, Any]) -> None:
+        """Aggiorna il deficit durante la giornata, non solo a mezzanotte.
+
+        Con 30 gradi il prato consuma acqua dalla mattina: un bilancio che
+        si muove solo allo scoccare della mezzanotte mostra zero per tutto
+        il giorno e fa partire l'irrigazione con un giorno di ritardo.
+        """
+        t_min, t_max = self._day_temperatures(daily, forecast)
+        if t_min is None or t_max is None:
+            return
+
+        now = dt_util.now()
+        et0 = self._et0_of(daily, t_min, t_max)
+        fraction = et_fraction_elapsed(
+            self._latitude,
+            now.timetuple().tm_yday,
+            now.hour + now.minute / 60.0,
+        )
+
+        daily["et0_today_method"] = et0.method
+        if self._charge(daily, et0.value_mm * fraction):
+            # i sensori e la pagina leggono lo store, non il coordinator
+            async_dispatcher_send(self.hass, SIGNAL_STATE_CHANGED)
+
+    def _day_temperatures(
+        self, daily: dict[str, Any], forecast: dict[str, Any]
+    ) -> tuple[float | None, float | None]:
+        """Tmin e Tmax da usare per la stima in corso di giornata.
+
+        A metà mattina il minimo osservato è quello vero, ma il massimo
+        deve ancora arrivare: prendere l'escursione vista finora
+        sottostima l'ET0 proprio nelle ore in cui serve. Se la previsione
+        di oggi dà estremi più larghi si usano quelli, e la chiusura del
+        giorno rimette comunque i conti sui dati misurati.
+        """
+        t_min, t_max = daily.get("t_min"), daily.get("t_max")
+        if not forecast.get("available"):
+            return t_min, t_max
+
+        f_min, f_max = forecast.get("t_min"), forecast.get("t_max")
+        if f_min is not None:
+            t_min = f_min if t_min is None else min(t_min, f_min)
+        if f_max is not None:
+            t_max = f_max if t_max is None else max(t_max, f_max)
+        return t_min, t_max
+
     def _close_day(self, daily: dict[str, Any]) -> dict[str, Any] | None:
-        """Chiude la giornata: calcola ET0 e aggiorna i deficit.
+        """Chiude la giornata: calcola ET0 definitivo e salda il bilancio.
 
         Ritorna il riepilogo del giorno chiuso, oppure None se mancavano
         le temperature (senza Tmin/Tmax nessun metodo ET0 è applicabile).
@@ -256,40 +378,13 @@ class IrrigazioneCoordinator(DataUpdateCoordinator):
             )
             return None
 
-        config = self._entry.data
+        et0 = self._et0_of(daily, t_min, t_max)
+        rain_mm = float(daily.get("rain_mm") or 0.0)
         rh_mean = daily["rh_sum"] / daily["rh_n"] if daily["rh_n"] else None
         wind_mean = daily["wind_sum"] / daily["wind_n"] if daily["wind_n"] else None
-        solar_mj = None
-        if daily["irr_n"]:
-            # media W/m² sull'intera giornata → MJ/m²/giorno
-            solar_mj = (daily["irr_sum"] / daily["irr_n"]) * 0.0864
-
-        closed = dt_util.parse_date(daily["date"]) if daily.get("date") else None
-        reference = closed or dt_util.now()
-        day_of_year = reference.timetuple().tm_yday
-
-        et0 = compute_et0(
-            t_min=t_min,
-            t_max=t_max,
-            latitude_deg=float(config.get(CONF_LATITUDE) or self.hass.config.latitude),
-            day_of_year=day_of_year,
-            rh_mean=rh_mean,
-            wind_ms=wind_mean,
-            solar_radiation_mj=solar_mj,
-            elevation_m=float(config.get(CONF_ELEVATION) or 0.0),
-        )
-
-        rain_mm = float(daily.get("rain_mm") or 0.0)
-        system = self._store.system
-        for zone_id, zone in self._store.zones.items():
-            params = resolve_zone_params(zone, system)
-            new_deficit = update_deficit(
-                float(zone.get("deficit_mm") or 0.0),
-                et0.value_mm,
-                params,
-                rain_mm=rain_mm,
-            )
-            self._store.async_set_deficit(zone_id, new_deficit)
+        # addebita il residuo: quello che la giornata ha già scaricato sul
+        # deficit ora per ora non va contato una seconda volta
+        self._charge(daily, et0.value_mm)
 
         _LOGGER.info(
             "Giorno %s chiuso: ET0 %.2f mm (%s), pioggia %.1f mm, %d zone aggiornate",
@@ -347,10 +442,14 @@ class IrrigazioneCoordinator(DataUpdateCoordinator):
             daily = {**DEFAULT_DAILY, **carried, "date": today}
 
         self._accumulate(daily, live)
+
+        # La previsione serve prima del bilancio, non dopo: a metà mattina
+        # è l'unica cosa che sa quanto salirà ancora la temperatura.
+        forecast = await self._fetch_forecast()
+        self._accrue(daily, forecast)
+
         daily["last_update"] = now.isoformat()
         self._store.async_save_daily(daily)
-
-        forecast = await self._fetch_forecast()
 
         wind_ms = live.get("wind_ms")
         return {

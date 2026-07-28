@@ -82,15 +82,15 @@ class IrrigationScheduler:
         now = dt_util.now()
         now_minutes = now.hour * 60 + now.minute
         today_key = WEEKDAYS[now.weekday()]
+        # Una sola partenza automatica al giorno: se è già stata consumata,
+        # oggi non succederà più nulla — e va detto, invece di promettere
+        # un orario che il programmatore poi ignora.
+        already_ran = group.get("last_auto_run") == now.date().isoformat()
 
         # Se siamo già dentro la finestra e oggi non è ancora partita, il
         # momento buono è adesso: la finestra dice quando è permesso
         # irrigare, non solo l'istante in cui cominciare.
-        if (
-            today_key in days
-            and window.contains(now_minutes)
-            and group.get("last_auto_run") != now.date().isoformat()
-        ):
+        if today_key in days and window.contains(now_minutes) and not already_ran:
             return {
                 "scheduled": True,
                 "when": now.isoformat(),
@@ -105,7 +105,7 @@ class IrrigationScheduler:
             day = now + timedelta(days=offset)
             if WEEKDAYS[day.weekday()] not in days:
                 continue
-            if offset == 0 and now_minutes >= start:
+            if offset == 0 and (now_minutes >= start or already_ran):
                 continue
             return {
                 "scheduled": True,
@@ -113,6 +113,7 @@ class IrrigationScheduler:
                     hour=start // 60, minute=start % 60, second=0, microsecond=0
                 ).isoformat(),
                 "today": offset == 0,
+                "already_ran": already_ran,
             }
 
         return {"scheduled": False, "reason": "nessun_giorno_attivo"}

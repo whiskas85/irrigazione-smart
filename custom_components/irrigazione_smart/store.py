@@ -89,6 +89,12 @@ DEFAULT_GROUP: dict[str, Any] = {
     "last_auto_run": None,
 }
 
+# Campi che descrivono *quando* il gruppo deve partire. Toccarne uno
+# significa "voglio che parta così": la partenza già consumata oggi non
+# deve bloccare il nuovo orario, altrimenti spostare la finestra alle
+# 15:07 non fa più nulla fino a domani.
+GROUP_SCHEDULE_FIELDS: tuple[str, ...] = ("window_start", "window_end", "days", "auto")
+
 # Campi accettati su una zona, con il valore usato quando non arrivano.
 # Le sentinelle -1 / "eredita" significano "eredita dal livello superiore".
 ZONE_FIELDS: dict[str, Any] = {
@@ -141,6 +147,13 @@ DEFAULT_DAILY: dict[str, Any] = {
     "wind_n": 0,
     "irr_sum": 0.0,
     "irr_n": 0,
+    # Quanto della giornata è già stato scaricato sul deficit. Il bilancio
+    # si aggiorna a ogni ciclo, non solo a mezzanotte: questi contatori
+    # dicono fin dove si è arrivati, così la chiusura del giorno addebita
+    # il residuo invece di ricontare tutto da capo.
+    "et0_charged_mm": 0.0,
+    "rain_charged_mm": 0.0,
+    "et0_today_method": None,
     # minuti irrigati oggi, per gruppo
     "irrigated": {},
     # esito dell'ultimo giorno chiuso
@@ -429,9 +442,22 @@ class IrrigazioneStore:
         group = self._data["groups"].get(category)
         if group is None:
             return None
+
+        rescheduled = any(
+            key in payload and payload[key] != group.get(key)
+            for key in GROUP_SCHEDULE_FIELDS
+        )
+
         for key in DEFAULT_GROUP:
             if key in payload:
                 group[key] = payload[key]
+
+        # Il nuovo orario vale da subito, anche se oggi il gruppo era già
+        # partito: chi sposta la finestra si aspetta di vederla rispettata
+        # oggi, non domani.
+        if rescheduled:
+            group["last_auto_run"] = None
+
         self._save()
         return group
 

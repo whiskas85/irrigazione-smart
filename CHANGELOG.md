@@ -8,6 +8,38 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Aggiunto
+- **Il bilancio idrico si aggiorna durante la giornata, non solo a
+  mezzanotte.** Con 30 gradi il prato consuma acqua dalla mattina, ma il
+  deficit restava a 0.0 mm fino allo scoccare della mezzanotte: la
+  pagina mostrava il falso proprio nelle ore in cui si decide se
+  irrigare, e l'impianto partiva con un giorno di ritardo. Ora a ogni
+  ciclo del coordinator (ogni 10 minuti) viene addebitata la quota di
+  ET0 già maturata, distribuita sulla curva della radiazione fra alba e
+  tramonto. La chiusura di mezzanotte resta e ricalcola l'ET0
+  definitiva sui dati misurati, addebitando solo il residuo: nessun
+  doppio conteggio
+- Finché la giornata è in corso la stima usa gli estremi di temperatura
+  previsti, se più larghi di quelli già osservati. A metà mattina il
+  massimo del giorno non è ancora arrivato, e usare la sola escursione
+  vista finora azzerava l'ET0 proprio nelle ore utili
+- La scheda *Bilancio idrico* mostra l'ET0 maturata oggi (prima mostrava
+  solo quella dell'ultimo giorno chiuso, cioè "nessuna" al primo avvio),
+  e il sensore ET0 la espone come attributo `et0_maturata_oggi_mm`
+
+### Corretto
+- **"Prossima irrigazione oggi alle 15:07", e alle 15:07 non parte
+  niente.** L'avvio automatico è uno al giorno per gruppo, ma il conto
+  della prossima partenza non ne teneva conto: un gruppo già partito la
+  mattina continuava a promettere l'orario di oggi, per poi saltare a
+  domani nel momento esatto in cui sarebbe dovuto partire — senza che
+  nessuna valvola si aprisse. Ora la partenza già consumata è considerata
+  anche nel calcolo, e la pagina lo scrive ("mercoledì alle 15:07, oggi è
+  già partita") invece di far sparire l'orario di nascosto
+- **Spostare la finestra non aveva effetto fino al giorno dopo** se il
+  gruppo era già partito. Cambiare orario, giorni o avvio automatico
+  rimette in gioco la giornata in corso: il nuovo orario vale da subito
+
 ## [0.9.3] - 2026-07-28
 
 ### Corretto

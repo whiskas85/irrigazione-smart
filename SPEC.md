@@ -164,19 +164,39 @@ implementano esattamente questo ciclo per le aree.
 
 ## 5. Coordinator — flusso dati
 
-Ciclo giornaliero, ancorato all'orario di start meno 30 minuti:
+Ciclo ogni `UPDATE_INTERVAL_MIN` minuti, con chiusura del giorno a
+mezzanotte:
 
 ```
-1. Leggi meteo             → t_min, t_max, pioggia_24h, vento, previsioni
-2. Calcola ET0             → hydro.et0_hargreaves(t_min, t_max, lat, doy)
-3. Per ogni zona:
+1. Leggi meteo             → temperatura, umidità, vento, pioggia, previsioni
+2. Accumula la giornata    → t_min, t_max, medie, pioggia cumulata
+3. Stima ET0 del giorno    → hydro.compute_et0(t_min, t_max, ...)
+4. Quota già maturata      → hydro.et_fraction_elapsed(lat, doy, ora)
+5. Per ogni zona, addebita solo il delta non ancora scaricato:
    a. params  = hydro.resolve_zone_params(zone, system)
-   b. deficit = hydro.update_deficit(deficit_prec, et0, params, pioggia)
+   b. deficit = hydro.apply_water_balance(deficit, ΔETc, Δpioggia, params)
    c. plan    = hydro.evaluate_zone(zone, system, deficit, vento, previsioni)
    d. persisti deficit, esponi plan sulle entità
-4. All'orario di start, per le zone con plan.should_run:
+6. A mezzanotte: ET0 definitiva sui dati misurati, si addebita il residuo
+7. All'orario di start, per le zone con plan.should_run:
    → esegui la sequenza (§6)
 ```
+
+**Perché il bilancio non aspetta mezzanotte.** ET0 è una grandezza
+giornaliera, ma un deficit che resta a zero per tutta la giornata e
+salta di colpo dopo mezzanotte mostra il falso proprio nelle ore in cui
+si decide se irrigare, e fa partire l'impianto con un giorno di
+ritardo. La giornata si distribuisce quindi sulla curva della radiazione
+(una semisinusoide fra alba e tramonto, integrata da
+`et_fraction_elapsed`) e si addebita a piccoli passi.
+
+Il conto si tiene per **differenze**, non per totali: `daily` conserva
+`et0_charged_mm` e `rain_charged_mm`, cioè fin dove si è già arrivati.
+Due conseguenze volute — l'irrigazione che scala il deficit durante il
+giorno non viene cancellata da un ricalcolo, e la chiusura di mezzanotte
+addebita solo il residuo rispetto all'ET0 definitiva. La pioggia
+efficace si calcola sempre sul cumulato e poi si sottrae la quota già
+contata: la soglia dei 2 mm non è additiva.
 
 ### 5.1 Fonti dei dati: sensori locali con fallback meteo
 
