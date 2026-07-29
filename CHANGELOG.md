@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.2.3] - 2026-07-29
+
 ### Corretto
 - **"Pausa di assorbimento" e "pausa tra le linee" sembravano la stessa
   cosa.** Due nomi che si somigliano per due attese che non c'entrano
