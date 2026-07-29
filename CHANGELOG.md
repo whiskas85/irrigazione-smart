@@ -8,6 +8,20 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Corretto
+- **"Pausa di assorbimento" e "pausa tra le linee" sembravano la stessa
+  cosa.** Due nomi che si somigliano per due attese che non c'entrano
+  niente: il varco fra due linee (5 min) serve alla pressione
+  dell'impianto, l'assorbimento (30 min) serve al terreno e vale solo
+  **fra due passate della stessa linea**. Chiamarli entrambi "pausa"
+  faceva credere che l'impianto stesse fermo mezz'ora prima di passare
+  alla linea successiva, mentre nel frattempo sta irrigando le altre
+  - I due campi nelle impostazioni ora si chiamano *Assorbimento* e
+    *Varco fra due linee*, e ognuno spiega a cosa serve
+  - Durante l'attesa la scheda scrive «il terreno sta assorbendo,
+    nessun'altra linea da irrigare» invece di «pausa di assorbimento»:
+    quel momento arriva solo quando non c'è più niente da bagnare
+
 ## [1.2.2] - 2026-07-29
 
 ### Corretto

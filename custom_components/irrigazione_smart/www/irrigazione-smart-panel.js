@@ -1634,10 +1634,14 @@ class IrrigazioneSmartPanel extends HTMLElement {
     const r = this._overview.running || {};
     if (!r.active) return "";
 
+    // "pausa di assorbimento" faceva pensare che l'impianto stesse
+    // aspettando prima di passare alla linea dopo. Aspetta invece di
+    // poter tornare su questa, e ci arriva solo quando non c'è nessun
+    // altra linea da bagnare nel frattempo.
     const phase = {
       irrigazione: "in irrigazione",
-      assorbimento: "pausa di assorbimento",
-      pausa_tra_linee: "pausa tra le linee",
+      assorbimento: "il terreno sta assorbendo, nessun'altra linea da irrigare",
+      pausa_tra_linee: "cambio linea",
     }[r.phase] || r.phase || "";
 
     const pct = Number(r.progress || 0);
@@ -2049,8 +2053,11 @@ class IrrigazioneSmartPanel extends HTMLElement {
         </div>
         <div class="row">
           <ha-icon icon="mdi:timer-sand"></ha-icon>
-          <div class="row-main"><span class="row-label">Pause</span>
-            <span class="sub">assorbimento ${sys.soak_minutes} min · tra linee ${sys.gap_minutes} min</span>
+          <div class="row-main"><span class="row-label">Attese</span>
+            <span class="sub">
+              ${sys.soak_minutes} min di assorbimento fra due passate della
+              stessa linea · ${sys.gap_minutes} min di varco fra due linee
+            </span>
           </div>
         </div>
       </div></ha-card>`;
@@ -3962,8 +3969,20 @@ class IrrigazioneSmartPanel extends HTMLElement {
         key: "soil", label: "Terreno predefinito", type: "select",
         options: opts.soils || [], labels: SOIL_LABELS,
       },
-      { key: "soak_minutes", label: "Pausa di assorbimento", type: "number", suffix: "min" },
-      { key: "gap_minutes", label: "Pausa tra linee", type: "number", suffix: "min" },
+      {
+        key: "soak_minutes", label: "Assorbimento", type: "number", suffix: "min",
+        helper:
+          "Fra due passate della STESSA linea: il tempo perché il terreno " +
+          "beva prima di ricevere ancora. Non ferma l'impianto — nel " +
+          "frattempo irrigano le altre linee",
+      },
+      {
+        key: "gap_minutes", label: "Varco fra due linee", type: "number", suffix: "min",
+        helper:
+          "Fra due valvole qualsiasi. Serve alla pressione dell'impianto, " +
+          "non al terreno: aprire una valvola appena chiusa l'altra dà un " +
+          "colpo d'ariete",
+      },
       { key: "wind_max_kmh", label: "Vento massimo", type: "number", suffix: "km/h" },
       {
         key: "rain_forecast_max_mm", label: "Pioggia prevista massima",
