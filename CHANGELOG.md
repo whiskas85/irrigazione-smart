@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-07-29
+
 ### Corretto
 - **La pagina saltava in cima a ogni aggiornamento.** Il ridisegno rifaceva
   l'intero pannello, distruggendo anche il contenitore che scorre: il
