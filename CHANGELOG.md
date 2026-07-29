@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-07-29
+
 ### Aggiunto
 - **Batteria della valvola, per linea e per aiuola.** Gli irrigatori a
   batteria muoiono in silenzio: la valvola non apre, la linea non irriga,
