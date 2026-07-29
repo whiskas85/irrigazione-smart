@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-07-29
+
 ### Corretto
 - **«Ferma» ferma tutto l'impianto, non la linea.** Il pulsante stava su
   una scheda intitolata al nome della linea in corso, e si leggeva come
