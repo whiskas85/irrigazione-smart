@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-07-29
+
 ### Aggiunto
 - **L'avviso di versione ora porta il rimedio con sé.** Diceva cosa non
   andava e lasciava lì: adesso c'è il pulsante che risolve, e sono due
