@@ -8,6 +8,13 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Modificato
+- **Il badge della batteria resta in alto a destra della linea.** Sul
+  telefono era finito a capo insieme agli altri stati: non è uno stato
+  fra gli altri, è la ragione per cui una valvola non aprirà, e in fondo
+  alla riga lo si vede quando è troppo tardi. Ora tiene la prima riga
+  accanto al nome, all'estremità destra
+
 ## [1.7.1] - 2026-07-29
 
 ### Corretto

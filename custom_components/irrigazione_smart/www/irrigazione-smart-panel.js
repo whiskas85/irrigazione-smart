@@ -4962,18 +4962,23 @@ class IrrigazioneSmartPanel extends HTMLElement {
         .content { padding: 12px; }
         .inner { padding: 14px; }
 
-        .row, .zone-head, .card-head, .master-row { flex-wrap: wrap; }
+        .row, .zone-head, .card-head, .master-row { flex-wrap: wrap; gap: 10px; }
         /* il testo tiene la prima riga insieme all'interruttore: è la
            coppia che si guarda per prima */
         .row > .row-main,
         .zone-head > .zone-title,
-        .master-row > .master-main { flex: 1 1 120px; }
+        .master-row > .master-main { flex: 1 1 90px; }
 
         .row > .badge, .row > .btn, .row > ha-icon-button,
         .zone-head > .badge, .zone-head > ha-icon-button,
         .master-row > .btn { order: 3; }
-        .row:has(> .badge, > .btn, > ha-icon-button)::after,
-        .zone-head:has(> .badge, > ha-icon-button)::after,
+        /* La batteria fa eccezione e resta in alto a destra, in cima al
+           riquadro della linea: non è uno stato fra gli altri, è la
+           ragione per cui una valvola non aprirà. Mandarla in fondo
+           insieme al resto vuol dire vederla quando è troppo tardi. */
+        .row > .badge.batt, .zone-head > .badge.batt { order: 0; }
+        .row:has(> .badge:not(.batt), > .btn, > ha-icon-button)::after,
+        .zone-head:has(> .badge:not(.batt), > ha-icon-button)::after,
         .master-row:has(> .btn)::after {
           content: ""; order: 2; flex: 1 0 100%; height: 0;
         }
