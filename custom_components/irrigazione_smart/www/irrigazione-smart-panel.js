@@ -248,6 +248,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
   disconnectedCallback() {
     clearTimeout(this._timer);
     clearTimeout(this._softTimer);
+    clearInterval(this._waitTimer);
   }
 
   _schedulePoll() {
@@ -395,6 +396,18 @@ class IrrigazioneSmartPanel extends HTMLElement {
     this.dispatchEvent(
       new CustomEvent("hass-toggle-menu", { bubbles: true, composed: true })
     );
+  }
+
+  /* La linea che sta ricevendo acqua *adesso*.
+
+     Non basta che una sequenza sia in corso: fra una passata e l'altra
+     l'impianto aspetta, e in quei minuti nessuna valvola è aperta.
+     Segnare comunque "in irrigazione" la linea che toccherà dopo faceva
+     lampeggiare la linea sbagliata per mezz'ora. */
+  _wateringZoneId() {
+    const running = (this._overview && this._overview.running) || {};
+    if (!running.active || running.phase !== "irrigazione") return null;
+    return running.zone_id || null;
   }
 
   _liveState(entityId) {
@@ -563,6 +576,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
       this._tab = e.currentTarget.getAttribute("data-tab");
       this._render();
     });
+    this._startWaitTicker();
     if (this._tab === "mappa") {
       this._bindMap();
       this._renderCards();
@@ -1663,9 +1677,99 @@ class IrrigazioneSmartPanel extends HTMLElement {
                <span>${r.elapsed_min ?? 0} di ${r.zone_total_min ?? 0} min</span>
                <span class="spacer"></span><span class="muted">${pct}%</span>
              </div>`
-          : ""
+          : this._waitBar(r)
       }
     </div></ha-card>`;
+  }
+
+  /* Conto alla rovescia dell'attesa.
+
+     Colore di terra, non azzurro: l'azzurro vuol dire che sta uscendo
+     acqua, e usarlo anche qui direbbe il contrario di quello che
+     succede. Qui l'acqua è già caduta e il terreno se la sta bevendo.
+
+     La barra si svuota invece di riempirsi — è un tempo che scade, non
+     un lavoro che avanza — e il conto lo fa la pagina da sé: aggiornarlo
+     solo a ogni giro di rete lo farebbe scattare di tre secondi in tre. */
+  _waitBar(r) {
+    if (!r.wait_ends_at || !r.wait_total_min) return "";
+
+    const soak = r.phase === "assorbimento";
+    return `<div class="bar big wait${soak ? " soak" : ""}">
+        <div class="bar-fill" data-wait-fill
+             data-ends="${esc(r.wait_ends_at)}"
+             data-total="${r.wait_total_min}" style="width:100%"></div>
+      </div>
+      <div class="zone-meta">
+        <span data-wait-text>${this._waitText(r.wait_remaining_min)}</span>
+        <span class="spacer"></span>
+        <span class="muted">${
+          soak
+            ? `assorbimento di ${r.wait_total_min} min`
+            : `varco di ${r.wait_total_min} min`
+        }</span>
+      </div>`;
+  }
+
+  _waitText(minutes) {
+    const left = Math.max(0, Number(minutes || 0));
+    if (left >= 1) return `mancano ${Math.ceil(left)} min`;
+    return `mancano ${Math.max(0, Math.ceil(left * 60))} s`;
+  }
+
+  /* Fa scorrere il conto alla rovescia senza ridisegnare la pagina. */
+  _startWaitTicker() {
+    clearInterval(this._waitTimer);
+    const fill = this.shadowRoot.querySelector("[data-wait-fill]");
+    if (!fill) return;
+
+    const ends = new Date(fill.getAttribute("data-ends")).getTime();
+    const total = Number(fill.getAttribute("data-total")) * 60000;
+    const text = this.shadowRoot.querySelector("[data-wait-text]");
+
+    const tick = () => {
+      // l'elemento sparisce quando l'attesa finisce e la scheda cambia
+      if (!fill.isConnected) {
+        clearInterval(this._waitTimer);
+        return;
+      }
+      const left = Math.max(0, ends - Date.now());
+      fill.style.width = `${total > 0 ? (left / total) * 100 : 0}%`;
+      if (text) text.textContent = this._waitText(left / 60000);
+    };
+
+    tick();
+    this._waitTimer = setInterval(tick, 1000);
+  }
+
+  /* Avanzamento della singola linea, mentre la sequenza è in corso.
+
+     Con le passate alternate la scheda in cima parla solo della linea
+     del momento, e delle altre non si sa niente: una può aver ricevuto
+     tre passate su quattro e un'altra non aver ancora cominciato. Qui
+     ogni riga dice a che punto è la sua. */
+  _lineProgress(zone) {
+    const r = this._overview.running || {};
+    const stato = (r.progress_zones || {})[zone.id];
+    if (!r.active || !stato || !stato.totale_min) return "";
+
+    const pct = Math.min(100, (stato.fatti_min / stato.totale_min) * 100);
+    const finita = stato.stato === "completata";
+    const fallita = stato.stato === "fallita";
+
+    return `<span class="line-prog">
+      <span class="bar${fallita ? " failed" : finita ? " done" : ""}">
+        <span class="bar-fill" style="width:${pct.toFixed(1)}%"></span>
+      </span>
+      <span class="sub">${
+        fallita
+          ? "non partita"
+          : `${stato.fatti_min} di ${stato.totale_min} min · ${Math.round(pct)}%` +
+            (stato.passate > 1
+              ? ` · passata ${Math.min(stato.passate_fatte + (finita ? 0 : 1), stato.passate)}/${stato.passate}`
+              : "")
+      }</span>
+    </span>`;
   }
 
   _masterCard(sys, zones, running, sched) {
@@ -1693,6 +1797,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
           <div class="cell"><span class="k">Chiedono acqua</span><span class="v">${running.length}</span></div>
           <div class="cell"><span class="k">Tempo totale</span><span class="v">${sched.total_minutes || 0}<span class="of"> min</span></span></div>
         </div>
+        ${this._overallProgress()}
         ${this._flowRow()}
         ${
           on && !busy
@@ -1700,6 +1805,33 @@ class IrrigazioneSmartPanel extends HTMLElement {
             : ""
         }
       </div></ha-card>`;
+  }
+
+  /* A che punto è l'intera sequenza.
+
+     Con le linee che si alternano, "sta irrigando la 5" non dice quanto
+     manca alla fine: la 5 può essere alla prima passata di quattro. Il
+     conto si fa sui minuti d'acqua di tutte le linee messe insieme. */
+  _overallProgress() {
+    const r = this._overview.running || {};
+    if (!r.active || !r.progress_total_min) return "";
+
+    const pct = Math.min(100, Number(r.progress_overall || 0));
+    const linee = Object.values(r.progress_zones || {});
+    const finite = linee.filter((l) => l.stato === "completata").length;
+
+    return `<div class="overall">
+      <div class="bar big"><div class="bar-fill" style="width:${pct}%"></div></div>
+      <div class="zone-meta">
+        <span><b>${Math.round(pct)}%</b> della sequenza</span>
+        <span class="spacer"></span>
+        <span class="muted">
+          ${r.progress_done_min} di ${r.progress_total_min} min d'acqua${
+            linee.length ? ` · ${finite}/${linee.length} linee concluse` : ""
+          }
+        </span>
+      </div>
+    </div>`;
   }
 
   /* Flussostato: sola lettura, come richiesto. Non blocca nulla. */
@@ -1758,7 +1890,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
     const rowFor = (z) => {
       const c = z.computed || {};
       const plan = c.plan || {};
-      const st = zoneStatus(z, running.active ? running.zone_id : null);
+      const st = zoneStatus(z, this._wateringZoneId());
       const deficit = Number(z.deficit_mm || 0);
       const thr = Number(c.trigger_threshold_mm || 0);
       const busy = !!running.active;
@@ -1782,6 +1914,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
         <div class="row-main">
           <span class="row-label">${esc(z.name)}</span>
           <span class="sub">${deficit.toFixed(1)} / ${thr.toFixed(1)} mm${this._lastRunText(z)}</span>
+          ${this._lineProgress(z)}
         </div>
         ${state}
         ${
@@ -2099,7 +2232,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
   _areaStatus(area) {
     const zone = this._areaZone(area);
     if (!zone) return { level: "none", label: "nessuna linea collegata" };
-    return zoneStatus(zone, (this._overview.running || {}).zone_id || null);
+    return zoneStatus(zone, this._wateringZoneId());
   }
 
   /* Nome dell'area: il suo, se gliene è stato dato uno, altrimenti
@@ -4402,6 +4535,21 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .bar.big { height: 10px; margin-top: 14px; }
       .bar-fill { height: 100%; background: var(--info-color, var(--primary-color)); transition: width .3s; }
       .bar-fill.over { background: var(--warning-color, #ffa600); }
+      /* Attesa: colore di terra, non azzurro. L'azzurro dice "sta
+         uscendo acqua", e qui è l'opposto — l'acqua è già caduta e il
+         terreno se la sta bevendo. La barra si svuota, non si riempie:
+         è un tempo che scade. Un secondo di transizione, quanto il
+         passo del conto, così scorre invece di scattare. */
+      .bar.wait .bar-fill { background: var(--warning-color, #ffa600);
+                            transition: width 1s linear; }
+      .bar.wait.soak .bar-fill { background: #8d6e63; }
+
+      /* avanzamento della singola linea, sotto il suo nome */
+      .line-prog { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; }
+      .line-prog .bar { height: 5px; margin-top: 0; }
+      .line-prog .bar.done .bar-fill { background: var(--success-color, #43a047); }
+      .line-prog .bar.failed .bar-fill { background: var(--error-color, #db4437); }
+      .overall { margin-top: 14px; }
       .bar-thr { position: absolute; top: -2px; width: 2px; height: 12px; background: var(--primary-text-color); opacity: .55; }
 
       .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 12px; margin-top: 10px; }

@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import logging
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant, callback
@@ -83,6 +84,7 @@ class _ZoneRun:
 
     applied: float = 0.0
     minutes_done: float = 0.0
+    done_cycles: int = 0
     confirmed: bool = False
     started: bool = False
     failed: bool = False
@@ -119,14 +121,23 @@ class IrrigationExecutor:
             return {"active": False}
 
         state = dict(self._state)
+
+        ends = state.get("wait_ends_at")
+        if ends is not None:
+            left = (ends - dt_util.utcnow()).total_seconds() / 60.0
+            state["wait_remaining_min"] = round(max(0.0, left), 2)
+            state["wait_ends_at"] = ends.isoformat()
+
         started = state.pop("cycle_started_at", None)
         # Avanzamento contato sui minuti d'acqua, non sull'orologio: con
         # le passate alternate fra le linee, fra un ciclo e l'altro di una
         # zona ne passano altre, e una barra a tempo reale segnerebbe il
         # 100% quando la linea ha ricevuto un quarto dell'acqua.
         done = float(state.get("zone_done_min") or 0.0)
+        corrente = 0.0
         if started:
-            done += (dt_util.utcnow() - started).total_seconds() / 60.0
+            corrente = (dt_util.utcnow() - started).total_seconds() / 60.0
+            done += corrente
             state["cycle_started_at"] = started.isoformat()
 
         total = state.get("zone_total_min") or 0
@@ -134,12 +145,87 @@ class IrrigationExecutor:
         state["progress"] = (
             round(min(100.0, done / total * 100.0), 1) if total else 0.0
         )
+
+        # I contatori per linea si aggiornano a fine passata; qui si
+        # aggiunge quella in corso, altrimenti la barra della linea che
+        # sta bagnando resterebbe ferma per tutta la passata.
+        if corrente > 0 and state.get("progress_zones"):
+            linee = {k: dict(v) for k, v in state["progress_zones"].items()}
+            attiva = linee.get(state.get("zone_id"))
+            if attiva:
+                vivo = min(attiva["totale_min"], attiva["fatti_min"] + corrente)
+                delta = vivo - attiva["fatti_min"]
+                attiva["fatti_min"] = round(vivo, 1)
+                state["progress_zones"] = linee
+                fatti = float(state.get("progress_done_min") or 0.0) + delta
+                totali = float(state.get("progress_total_min") or 0.0)
+                state["progress_done_min"] = round(fatti, 1)
+                state["progress_overall"] = (
+                    round(min(100.0, fatti / totali * 100.0), 1) if totali else 0.0
+                )
+
         state["active"] = True
         return state
 
     def _publish(self, **changes: Any) -> None:
         self._state.update(changes)
         async_dispatcher_send(self._hass, SIGNAL_STATE_CHANGED)
+
+    def _publish_progress(self, runs: list[_ZoneRun]) -> None:
+        """Avanzamento di ogni linea e dell'intera sequenza.
+
+        Serve perché con le passate alternate non si capisce più a che
+        punto si è: una linea può aver ricevuto tre passate su quattro
+        mentre un'altra non ha ancora cominciato, e la scheda in cima
+        parla solo di quella del momento.
+
+        Si misura in **minuti d'acqua**, non in passate: le passate sono
+        tutte uguali, ma una interrotta a metà ha dato meno delle altre.
+        """
+        linee = {}
+        fatti = 0.0
+        totali = 0.0
+
+        for run in runs:
+            done = min(run.minutes_done, run.total_minutes)
+            linee[run.zone_id] = {
+                "nome": run.name,
+                "fatti_min": round(done, 1),
+                "totale_min": round(run.total_minutes, 1),
+                "passate_fatte": run.done_cycles,
+                "passate": run.cycles,
+                "stato": (
+                    "fallita"
+                    if run.failed
+                    else "completata"
+                    if run.completed
+                    else "in corso"
+                    if run.started
+                    else "in attesa"
+                ),
+            }
+            fatti += done
+            totali += run.total_minutes
+
+        self._publish(
+            progress_zones=linee,
+            progress_done_min=round(fatti, 1),
+            progress_total_min=round(totali, 1),
+            progress_overall=round(fatti / totali * 100.0, 1) if totali else 0.0,
+        )
+
+    @staticmethod
+    def _wait_state(minutes: float) -> dict[str, Any]:
+        """Quanto dura l'attesa e quando finisce.
+
+        Si manda l'istante di fine e non i minuti che restano: la pagina
+        si aggiorna ogni pochi secondi, e un conto alla rovescia calcolato
+        di là scorre liscio invece di scattare a strappi.
+        """
+        return {
+            "wait_total_min": round(minutes, 2),
+            "wait_ends_at": dt_util.utcnow() + timedelta(minutes=minutes),
+        }
 
     # ------------------------------------------------------------ valvole
 
@@ -487,14 +573,31 @@ class IrrigationExecutor:
         loop = self._hass.loop
         previous: _ZoneRun | None = None
 
+        # tutte le linee compaiono subito a zero: la lista deve dire
+        # "questa non ha ancora cominciato", non tacere
+        self._publish_progress(runs)
+
         for run, cycle in steps:
             # una linea che ha già fallito non riprova le passate rimaste:
             # se la valvola non ha risposto, non risponderà fra dieci minuti
             if run.failed:
                 continue
 
+            # Nome, id e numero di passata descrivono sempre la **stessa**
+            # linea: quella che sta per ricevere acqua. Aggiornarne uno
+            # solo lasciava in pagina il nome di chi aveva appena finito
+            # accanto all'identificativo di chi doveva ancora cominciare,
+            # e la lista evidenziava una linea diversa da quella scritta
+            # in testa.
             if previous is not None and gap:
-                self._publish(phase="pausa_tra_linee", zone_id=None)
+                self._publish(
+                    phase="pausa_tra_linee",
+                    zone_id=run.zone_id,
+                    zone_name=run.name,
+                    cycle=cycle,
+                    cycles=run.cycles,
+                    **self._wait_state(gap),
+                )
                 if not await self._pause(gap):
                     raise IrrigationAborted("master spento durante la pausa")
 
@@ -504,7 +607,14 @@ class IrrigationExecutor:
             if run.ready_at is not None:
                 left = (run.ready_at - loop.time()) / 60.0
                 if left > 0:
-                    self._publish(phase="assorbimento", zone_id=run.zone_id)
+                    self._publish(
+                        phase="assorbimento",
+                        zone_id=run.zone_id,
+                        zone_name=run.name,
+                        cycle=cycle,
+                        cycles=run.cycles,
+                        **self._wait_state(left),
+                    )
                     if not await self._pause(left):
                         raise IrrigationAborted(
                             "master spento durante l'assorbimento"
@@ -520,14 +630,17 @@ class IrrigationExecutor:
             if not ok:
                 run.failed = True
                 self._finalize(run, interrupted=True)
+                self._publish_progress(runs)
                 if run.abort_reason:
                     raise IrrigationAborted(run.abort_reason)
                 continue
 
+            run.done_cycles = cycle
             run.ready_at = loop.time() + run.soak_minutes * 60.0
             if cycle >= run.cycles:
                 run.completed = True
                 self._finalize(run)
+            self._publish_progress(runs)
 
     def _fire_zone_started(self, run: _ZoneRun) -> None:
         self._hass.bus.async_fire(
@@ -561,6 +674,10 @@ class IrrigationExecutor:
             zone_total_min=run.total_minutes,
             zone_done_min=round(run.per_cycle * (cycle - 1), 2),
             cycle_started_at=dt_util.utcnow(),
+            # l'attesa è finita: senza azzerarli, il conto alla rovescia
+            # resterebbe a schermo mentre l'acqua sta già uscendo
+            wait_total_min=None,
+            wait_ends_at=None,
         )
 
         try:

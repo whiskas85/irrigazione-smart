@@ -8,6 +8,34 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Corretto
+- **La lista segnava "in irrigazione" la linea sbagliata.** In cima si
+  leggeva "Sprinkler Line 5, pausa di assorbimento" e nella lista sotto
+  lampeggiava Line 1. Due cause: durante l'attesa venivano aggiornati
+  l'identificativo della linea ma non il nome, quindi la scheda parlava
+  di chi aveva appena finito e la lista di chi doveva ancora cominciare;
+  e soprattutto **durante l'attesa nessuna valvola è aperta**, ma la
+  lista continuava a marcare "in irrigazione" la prossima linea. Ora
+  quello stato compare solo mentre l'acqua sta davvero uscendo, e nome,
+  identificativo e numero di passata descrivono sempre la stessa linea
+
+### Aggiunto
+- **Conto alla rovescia dell'attesa**, con una barra che si svuota
+  invece di riempirsi: è un tempo che scade, non un lavoro che avanza.
+  Colore di terra per l'assorbimento — l'azzurro vuol dire "sta uscendo
+  acqua" e qui è l'opposto — e ambra per il varco fra due linee. Il
+  conto scorre di secondo in secondo, calcolato dalla pagina: aggiornarlo
+  solo a ogni giro di rete lo farebbe scattare di tre secondi in tre
+- **Avanzamento per ogni linea** nella lista: minuti d'acqua ricevuti sul
+  totale, percentuale e a che passata è arrivata. Con le passate alternate
+  una linea può essere a tre quarti e un'altra non aver ancora cominciato,
+  e la scheda in cima parla solo di quella del momento. Verde quando ha
+  finito, rossa se non è partita
+- **Percentuale complessiva della sequenza** sulla scheda principale,
+  contata sui minuti d'acqua di tutte le linee insieme, con quante linee
+  sono concluse. "Sta irrigando la 5" non dice quanto manca alla fine:
+  la 5 può essere alla prima passata di quattro
+
 ## [1.2.3] - 2026-07-29
 
 ### Corretto
