@@ -8,6 +8,26 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Aggiunto
+- **L'avviso di versione ora porta il rimedio con sé.** Diceva cosa non
+  andava e lasciava lì: adesso c'è il pulsante che risolve, e sono due
+  pulsanti diversi perché sono due guasti opposti. Se il Python in
+  memoria è rimasto indietro — il caso normale dopo un aggiornamento da
+  HACS — compare **Riavvia Home Assistant**, che è l'unico modo per
+  ricaricarlo; ricaricare la pagina non servirebbe a niente, e ora
+  l'avviso lo dice. Se invece è la pagina a essere vecchia, perché la
+  scheda del browser è aperta da prima dell'aggiornamento, compare
+  **Ricarica la pagina**
+  - Il riavvio si conferma prima di partire, e se c'è un'irrigazione in
+    corso la richiesta lo scrive: verrà interrotta, e la valvola aperta
+    richiusa al riavvio
+  - Dopo il comando l'avviso diventa «riavvio in corso» e sparisce da
+    solo quando l'integration nuova risponde. Se dopo due minuti è
+    ancora quella di prima, torna il pulsante: un riavvio che non è
+    avvenuto non deve somigliare a un'attesa
+  - A chi non è amministratore il pulsante non compare — il servizio gli
+    risponderebbe soltanto «non autorizzato»
+
 ## [1.7.2] - 2026-07-29
 
 ### Modificato

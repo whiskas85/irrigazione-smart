@@ -126,6 +126,19 @@ const chartPalette = () => {
    equivalente stilizzato col tema, così la pagina resta sempre usabile. */
 const has = (tag) => !!customElements.get(tag);
 
+/* Confronto fra due versioni semantiche: >0 se la prima è più avanti.
+   Serve a sapere chi dei due lati è rimasto indietro — la pagina o
+   l'integration — perché il rimedio è diverso. */
+function compareVersions(a, b) {
+  const parti = (v) => String(v || "").split(".").map((n) => parseInt(n, 10) || 0);
+  const [x, y] = [parti(a), parti(b)];
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const diff = (x[i] || 0) - (y[i] || 0);
+    if (diff) return diff;
+  }
+  return 0;
+}
+
 const label = (map, key) => map[key] || key;
 const esc = (s) =>
   String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
@@ -250,6 +263,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
     clearTimeout(this._timer);
     clearTimeout(this._softTimer);
     clearInterval(this._waitTimer);
+    clearTimeout(this._restartTimer);
     if (this._resizeObs) this._resizeObs.disconnect();
   }
 
@@ -707,6 +721,10 @@ class IrrigazioneSmartPanel extends HTMLElement {
     onClick(".delete-zone", (e) =>
       this._confirmDelete(e.currentTarget.getAttribute("data-id"))
     );
+    onClick(".restart-ha", () => this._confirmRestart());
+    // l'indirizzo del pannello porta l'impronta del file: ricaricando, il
+    // browser ne chiede uno nuovo e la copia vecchia in memoria se ne va
+    onClick(".reload-page", () => location.reload());
     onClick(".edit-system", () => this._openSystemDialog());
     onClick(".edit-sources", () => this._openSourcesDialog());
     // la tabella è l'equivalente leggibile del grafico, non un extra
@@ -963,12 +981,109 @@ class IrrigazioneSmartPanel extends HTMLElement {
     const running = this._overview && this._overview.version;
     if (!running || running === PANEL_VERSION || running === "?") return "";
 
+    if (this._restarting) {
+      return `<ha-alert alert-type="info" title="Riavvio in corso">
+        Home Assistant si sta riavviando. La pagina si riconnette da sola:
+        quando l'avviso sparisce, l'integration nuova è in esecuzione.
+      </ha-alert>`;
+    }
+
+    // Chi è avanti dice quale sia il rimedio, e sono rimedi opposti: il
+    // Python vecchio in memoria si sostituisce solo riavviando, mentre
+    // il JavaScript vecchio è una copia in cache del browser e se ne va
+    // ricaricando. Proporre il pulsante sbagliato manda a vuoto.
+    const paginaAvanti = compareVersions(PANEL_VERSION, running) > 0;
+
+    if (!paginaAvanti) {
+      return `<ha-alert alert-type="warning" title="Ricarica la pagina">
+        L'integration in esecuzione è la ${esc(running)}, ma questa pagina è
+        ancora la ${esc(PANEL_VERSION)}: il browser sta usando una copia
+        vecchia del pannello tenuta in cache.
+        <div class="actions">
+          ${this._button("reload-page", "Ricarica la pagina", { primary: true })}
+        </div>
+      </ha-alert>`;
+    }
+
     return `<ha-alert alert-type="warning" title="Riavvia Home Assistant">
       Questa pagina è la ${esc(PANEL_VERSION)}, ma l'integration in esecuzione
       è ancora la ${esc(running)}: l'aggiornamento è arrivato su disco e non
       in memoria. Finché non riavvii, le funzioni nuove rispondono
-      «non trovato».
+      «non trovato». Ricaricare la pagina non serve — il JavaScript nuovo
+      ce l'ha già, è il Python a essere fermo alla versione di prima.
+      ${
+        // riavviare la casa è roba da amministratore: a chi non può,
+        // il pulsante darebbe solo un errore
+        this._isAdmin()
+          ? `<div class="actions">
+               ${this._button("restart-ha", "Riavvia Home Assistant", { primary: true })}
+             </div>`
+          : `<p class="nomargin">Il riavvio può farlo un amministratore di
+               Home Assistant.</p>`
+      }
     </ha-alert>`;
+  }
+
+  /* Nel dubbio si considera amministratore: il pannello è aperto a tutti,
+     ma solo alcune versioni del frontend espongono l'utente. Se manca il
+     permesso lo dirà il servizio, e l'errore finisce in pagina. */
+  _isAdmin() {
+    const user = this._hass && this._hass.user;
+    return !user || user.is_admin !== false;
+  }
+
+  /* Il riavvio si chiede prima di farlo.
+
+     Non è il riavvio di questa integration: è quello di tutta la casa,
+     e se in quel momento sta uscendo acqua la sequenza si interrompe a
+     metà. Chi preme dev'esserselo sentito dire. */
+  _confirmRestart() {
+    const attivo = !!(this._overview.running || {}).active;
+
+    const dlg = this._makeDialog("Riavviare Home Assistant?");
+    const body = document.createElement("p");
+    body.className = "muted small";
+    body.textContent = attivo
+      ? "C'è un'irrigazione in corso: verrà interrotta e la valvola aperta " +
+        "richiusa al riavvio. Tutta la casa resta senza automazioni per " +
+        "qualche decina di secondi."
+      : "Tutta la casa resta senza automazioni per qualche decina di " +
+        "secondi. È l'unico modo per caricare in memoria l'integration " +
+        "aggiornata.";
+    dlg.appendChild(body);
+
+    const close = () => dlg.remove();
+    dlg.appendChild(
+      this._actionBar(
+        "Riavvia",
+        async () => {
+          close();
+          try {
+            await this._hass.callService("homeassistant", "restart");
+            this._restarting = true;
+            this._error = null;
+            // se dopo due minuti l'integration in esecuzione è ancora
+            // quella di prima, il riavvio non è andato a buon fine:
+            // l'avviso col pulsante deve tornare, non restare un'attesa
+            clearTimeout(this._restartTimer);
+            this._restartTimer = setTimeout(() => {
+              this._restarting = false;
+              this._render();
+            }, 120000);
+          } catch (err) {
+            // il servizio è riservato agli amministratori: se manca il
+            // permesso va detto, invece di non far succedere niente
+            this._error = (err && (err.message || err.error)) || String(err);
+          }
+          this._render();
+        },
+        close,
+        true
+      )
+    );
+
+    this.shadowRoot.appendChild(dlg);
+    this._layoutFallback(dlg);
   }
 
   _body() {
