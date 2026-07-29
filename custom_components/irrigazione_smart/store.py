@@ -49,6 +49,10 @@ DEFAULT_SYSTEM: dict[str, Any] = {
     "valve_timeout_s": 30,
     # tentativi in più dopo il primo, prima di saltare la linea
     "valve_retries": 2,
+    # Segnaposto di irrigazione in corso, per ritrovarla dopo un riavvio.
+    # Vuoto quando non sta irrigando; altrimenti dice quando è partita, su
+    # quale gruppo, e quale valvola risulta aperta in questo momento.
+    "active_run": None,
     # Master di notifiche e azioni: spenti, non parte nulla anche se le
     # singole voci sono abilitate.
     "notifications_enabled": True,
@@ -667,6 +671,17 @@ class IrrigazioneStore:
         del items[item_id]
         self._save()
         return True
+
+    def async_set_active_run(self, run: dict[str, Any] | None) -> None:
+        """Segna che un'irrigazione è in corso, o che è finita.
+
+        Si scrive **subito**, non col ritardo degli altri salvataggi: se
+        Home Assistant se ne va mentre una valvola è aperta, questo è
+        l'unico appiglio per ritrovarla al riavvio, e un salvataggio
+        rimandato di dieci secondi è esattamente quello che si perde.
+        """
+        self._data["system"]["active_run"] = run
+        self._store.async_delay_save(lambda: self._data, 0)
 
     def async_update_system(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Aggiorna le sole chiavi di sistema previste dai default."""

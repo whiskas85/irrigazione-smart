@@ -6,6 +6,7 @@ import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.start import async_at_started
 
 from .const import DOMAIN, PLATFORMS
 from .coordinator import IrrigazioneCoordinator
@@ -13,6 +14,7 @@ from .executor import IrrigationExecutor
 from .logbook import IrrigazioneLog, async_subscribe_events
 from .notifier import Notifier
 from .panel import async_remove_panel, async_setup_panel, async_setup_store
+from .recovery import async_recover_interrupted_run
 from .scheduler import IrrigationScheduler
 from .services import async_setup_services
 
@@ -44,6 +46,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     scheduler = IrrigationScheduler(hass, store)
     hass.data[DOMAIN]["scheduler"] = scheduler
     entry.async_on_unload(scheduler.async_start())
+
+    # Un'irrigazione interrotta da un riavvio va ritrovata e messa in
+    # sicurezza. Si aspetta che Home Assistant sia avviato del tutto:
+    # adesso le entità delle valvole potrebbero non esistere ancora, e
+    # chiederne lo stato risponderebbe "sconosciuta" su tutte.
+    async def _recover(_event=None) -> None:
+        await async_recover_interrupted_run(hass, store)
+
+    entry.async_on_unload(async_at_started(hass, _recover))
 
     await async_setup_services(hass)
 

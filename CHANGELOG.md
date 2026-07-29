@@ -8,6 +8,38 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Aggiunto
+- **La valvola che non chiude è ora il caso più serio del sistema.** Una
+  valvola che non apre lascia un prato asciutto; una che non chiude allaga
+  il giardino, svuota il pozzo e continua a farlo finché qualcuno non se
+  ne accorge di persona. Fra i due errori non c'è simmetria, e il codice
+  ora lo riflette: **sei tentativi** di chiusura (non configurabili, non
+  c'è motivo per cui qualcuno debba poterli abbassare), poi una
+  **notifica persistente** che resta davanti agli occhi finché non la si
+  scarta, l'irrigazione interrotta per non aprire altre valvole, e
+  l'evento `irrigazione_smart_valve_stuck` per chi vuole agganciarci una
+  sirena o la chiusura della generale
+  - Vale anche quando si preme *Ferma tutto*: fermare l'irrigazione non
+    deve poter lasciare acqua aperta
+- **Ripresa dopo un riavvio.** Un'irrigazione dura ore, e in quelle ore
+  Home Assistant può riavviarsi o aggiornarsi: il task che seguiva la
+  sequenza sparisce, ma **l'acqua no** — un relè chiuso resta chiuso. Ora
+  un segnaposto su disco dice quale valvola era aperta, e al riavvio il
+  sistema la chiude, lo scrive nel registro e avvisa con una notifica
+  - La giornata torna in gioco: il marcatore "già partito oggi" viene
+    cancellato per i gruppi che hanno ancora linee a secco, così
+    l'irrigazione interrotta riprende invece di essere persa fino a
+    domani. Non si ricostruisce nessuno stato — ci pensa il bilancio
+    idrico a sapere cosa manca, e le linee già servite sono sotto soglia
+  - L'acqua erogata si mette a bilancio **a ogni passata** e non a fine
+    linea: se il riavvio arriva fra una passata e l'altra, quella passata
+    è comunque uscita e il terreno l'ha ricevuta
+
+### Modificato
+- **Le schede in alto restano visibili mentre la pagina scorre.** Sono la
+  navigazione, e doverla riesumare risalendo una pagina lunga di linee è
+  la ragione per cui si finisce a scorrere avanti e indietro
+
 ## [1.6.0] - 2026-07-29
 
 ### Modificato

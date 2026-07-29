@@ -30,7 +30,9 @@ from .const import (
     EVENT_ZONE_FAILED,
     EVENT_ZONE_FINISHED,
     EVENT_ZONE_STARTED,
+    EVENT_VALVE_STUCK,
     SIGNAL_STATE_CHANGED,
+    VALVE_CLOSE_ATTEMPTS,
     VALVE_CONFIRM_TIMEOUT,
     VALVE_RETRIES,
     VALVE_RETRY_PAUSE_S,
@@ -43,7 +45,7 @@ from .hydro import (
     interleave_cycles,
     resolve_zone_params,
 )
-from .logbook import WARNING, get_log
+from .logbook import ERROR, WARNING, get_log
 from .store import IrrigazioneStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -308,11 +310,113 @@ class IrrigationExecutor:
         return await self._wait_for_state(entity_id, OPEN_STATES, timeout)
 
     async def _close(self, entity_id: str) -> None:
-        """Chiude la valvola, senza sollevare eccezioni."""
+        """Chiude la valvola, senza sollevare eccezioni.
+
+        Comando e basta, senza verifica: si usa dove la chiusura è un
+        gesto di igiene — dopo un'apertura non confermata, dove la
+        valvola non era comunque aperta.
+        """
         try:
             await self._switch_valve(entity_id, False)
         except Exception:
             _LOGGER.exception("Chiusura della valvola %s fallita", entity_id)
+
+    async def _close_confirmed(self, entity_id: str, zone_name: str) -> bool:
+        """Chiude la valvola e **pretende** la conferma, insistendo.
+
+        È il caso più grave che questo software possa incontrare. Una
+        valvola che non apre lascia un prato asciutto; una valvola che non
+        chiude allaga il giardino, svuota il pozzo o manda in blocco
+        l'autoclave, e continua a farlo finché qualcuno non se ne accorge
+        di persona. Per questo si insiste molto più che in apertura, e per
+        questo il fallimento non finisce solo nel registro ma diventa una
+        notifica che resta lì finché non la si chiude a mano.
+        """
+        timeout = float(
+            self._store.system.get("valve_timeout_s") or VALVE_CONFIRM_TIMEOUT
+        )
+
+        for tentativo in range(1, VALVE_CLOSE_ATTEMPTS + 1):
+            await self._close(entity_id)
+            if await self._wait_for_state(entity_id, CLOSED_STATES, timeout):
+                if tentativo > 1:
+                    _LOGGER.warning(
+                        "La valvola %s si è chiusa al tentativo %d",
+                        entity_id,
+                        tentativo,
+                    )
+                return True
+
+            _LOGGER.error(
+                "La valvola %s della linea %s non conferma la chiusura "
+                "(tentativo %d di %d)",
+                entity_id,
+                zone_name,
+                tentativo,
+                VALVE_CLOSE_ATTEMPTS,
+            )
+            if tentativo < VALVE_CLOSE_ATTEMPTS:
+                await asyncio.sleep(VALVE_RETRY_PAUSE_S)
+
+        self._alert_stuck_open(entity_id, zone_name)
+        return False
+
+    def _mark_open(self, entity_id: str | None) -> None:
+        """Annota su disco quale valvola è aperta in questo istante.
+
+        È l'unica informazione che sopravvive a un riavvio improvviso, ed
+        è quella che al ritorno permette di andare a chiudere proprio
+        quella invece di tentare alla cieca su tutte.
+        """
+        active = self._store.system.get("active_run")
+        if not active:
+            return
+        self._store.async_set_active_run({**active, "aperta": entity_id})
+
+    def _alert_stuck_open(self, entity_id: str, zone_name: str) -> None:
+        """Notifica persistente: la valvola potrebbe essere rimasta aperta.
+
+        Persistente di proposito. Una riga di registro la si legge se la
+        si va a cercare; questa resta davanti agli occhi a ogni apertura
+        di Home Assistant finché non la si scarta, che è esattamente il
+        comportamento che serve quando dall'altra parte sta uscendo acqua.
+        """
+        messaggio = (
+            f"La valvola **{entity_id}** della linea **{zone_name}** non ha "
+            f"confermato la chiusura dopo {VALVE_CLOSE_ATTEMPTS} tentativi.\n\n"
+            "Potrebbe essere rimasta aperta: **controlla l'impianto di "
+            "persona** e chiudi la valvola a mano se serve.\n\n"
+            "L'irrigazione è stata interrotta per non aprirne altre."
+        )
+
+        self._hass.async_create_task(
+            self._hass.services.async_call(
+                "persistent_notification",
+                "create",
+                {
+                    "title": "Irrigazione: valvola forse rimasta aperta",
+                    "message": messaggio,
+                    # id fisso per valvola: una valvola che sbaglia dieci
+                    # volte non deve produrre dieci notifiche identiche
+                    "notification_id": f"{DOMAIN}_valvola_aperta_{entity_id}",
+                },
+                blocking=False,
+            )
+        )
+
+        activity = get_log(self._hass)
+        if activity is not None:
+            activity.add(
+                "zone_failed",
+                f"{zone_name}: la valvola {entity_id} non ha confermato la "
+                f"chiusura — potrebbe essere rimasta aperta",
+                level=ERROR,
+            )
+
+        self._hass.bus.async_fire(
+            EVENT_VALVE_STUCK,
+            {"valvola": entity_id, "nome": zone_name, "tentativi": VALVE_CLOSE_ATTEMPTS},
+        )
 
     async def _irrigate_for(self, valve: str, minutes: float) -> str:
         """Attende la durata sorvegliando che l'acqua stia ancora scorrendo.
@@ -424,6 +528,18 @@ class IrrigationExecutor:
         runs = [run for run in runs if run is not None]
         steps = self._interleaved_steps(runs)
 
+        # Segnaposto per ritrovare l'irrigazione se Home Assistant se ne
+        # va nel mezzo: senza, al riavvio nessuno sa che c'era una valvola
+        # aperta e resta aperta.
+        self._store.async_set_active_run(
+            {
+                "started_at": dt_util.utcnow().isoformat(),
+                "trigger": trigger,
+                "valvole": [run.valve for run in runs],
+                "aperta": None,
+            }
+        )
+
         # "prossima linea" nelle notifiche: con le passate alternate non è
         # più la successiva in elenco, ma quella che finirà dopo di questa
         finishing = []
@@ -446,6 +562,7 @@ class IrrigationExecutor:
             raise
         finally:
             duration = (dt_util.utcnow() - started_at).total_seconds() / 60.0
+            self._store.async_set_active_run(None)
             self._state = {}
             self._hass.bus.async_fire(
                 EVENT_FINISHED,
@@ -766,12 +883,29 @@ class IrrigationExecutor:
                 return False
 
             run.confirmed = True
+            self._mark_open(run.valve)
             began = dt_util.utcnow()
             outcome = await self._irrigate_for(run.valve, run.per_cycle)
             elapsed = (dt_util.utcnow() - began).total_seconds() / 60.0
             run.applied += run.params.applied_mm(min(elapsed, run.per_cycle))
             run.minutes_done += min(elapsed, run.per_cycle)
-            await self._close(run.valve)
+
+            # L'acqua erogata si mette a bilancio adesso, non alla fine
+            # della linea: se Home Assistant si riavvia fra una passata e
+            # l'altra, questa passata è comunque uscita e il terreno l'ha
+            # ricevuta. Contarla solo in fondo la farebbe sparire.
+            self._store.async_set_deficit(
+                run.zone_id, max(0.0, run.deficit - run.applied)
+            )
+
+            # Qui la valvola era davvero aperta: la chiusura va confermata,
+            # e se non arriva è la cosa più grave che possa succedere.
+            if not await self._close_confirmed(run.valve, run.name):
+                run.abort_reason = (
+                    f"la valvola {run.valve} non ha confermato la chiusura"
+                )
+                return False
+            self._mark_open(None)
 
             if outcome != "completato":
                 motivo = (
@@ -788,7 +922,16 @@ class IrrigationExecutor:
                 return False
 
         except asyncio.CancelledError:
-            await self._close(run.valve)
+            # Fermare l'irrigazione non deve poter lasciare acqua aperta:
+            # si insiste sulla chiusura anche qui, dove il task è già
+            # stato cancellato. `shield` serve perché un `await` dentro un
+            # task cancellato verrebbe interrotto di nuovo all'istante.
+            with contextlib.suppress(Exception):
+                await asyncio.shield(
+                    asyncio.ensure_future(
+                        self._close_confirmed(run.valve, run.name)
+                    )
+                )
             # l'acqua già erogata va comunque scalata dal deficit
             self._store.async_set_deficit(
                 run.zone_id, max(0.0, run.deficit - run.applied)

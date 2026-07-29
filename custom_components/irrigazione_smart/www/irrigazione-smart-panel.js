@@ -4443,9 +4443,16 @@ class IrrigazioneSmartPanel extends HTMLElement {
                      padding: 2px 8px; border-radius: 10px;
                      background: rgba(255,255,255,.15); }
 
+      /* Le schede restano in cima mentre il contenuto scorre: sono la
+         navigazione, e doverla riesumare risalendo una pagina lunga di
+         linee è la ragione per cui si finisce a scorrere avanti e
+         indietro. Lo sfondo dev'essere pieno, o il contenuto ci passa
+         sotto in trasparenza. */
       .tabs { display: flex; gap: 4px; padding: 0 8px; overflow-x: auto;
               background: var(--app-header-background-color, var(--primary-color));
-              color: var(--app-header-text-color, #fff); }
+              color: var(--app-header-text-color, #fff);
+              position: sticky; top: 0; z-index: 3;
+              box-shadow: 0 2px 4px rgba(0,0,0,.18); }
       .tab { display: flex; align-items: center; gap: 6px; padding: 12px 16px; border: none;
              background: none; color: inherit; opacity: .7; cursor: pointer; font-size: 14px;
              font-family: inherit; white-space: nowrap; border-bottom: 3px solid transparent; }

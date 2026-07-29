@@ -78,6 +78,14 @@ VALVE_RETRIES: Final = 2
 # fallire il primo comando.
 VALVE_RETRY_PAUSE_S: Final = 5
 
+# In chiusura si insiste molto di più, e non è configurabile.
+#
+# Una valvola che non apre lascia un prato asciutto; una che non chiude
+# allaga il giardino e continua a farlo finché qualcuno non se ne accorge
+# di persona. Fra i due errori non c'è simmetria, e non c'è motivo per
+# cui qualcuno debba poter abbassare questo numero.
+VALVE_CLOSE_ATTEMPTS: Final = 6
+
 # Eventi sul bus di Home Assistant, richiamabili anche da fuori
 # dall'integration (automazioni, script, altre integrazioni).
 EVENT_STARTED: Final = f"{DOMAIN}_started"
@@ -87,6 +95,14 @@ EVENT_ZONE_FINISHED: Final = f"{DOMAIN}_zone_finished"
 # Emesso quando una linea non parte: valvola che non conferma, valvola non
 # configurata, o linea saltata. È l'evento su cui agganciare gli allarmi.
 EVENT_ZONE_FAILED: Final = f"{DOMAIN}_zone_failed"
+
+# Valvola che non conferma la chiusura: si espone come evento perché
+# qualcuno vorrà agganciarci una sirena, un messaggio al telefono o la
+# chiusura dell'elettrovalvola generale.
+EVENT_VALVE_STUCK: Final = f"{DOMAIN}_valve_stuck"
+
+# Irrigazione ritrovata aperta al riavvio di Home Assistant.
+EVENT_RECOVERED: Final = f"{DOMAIN}_recovered"
 
 # Registro attività: file separato da quello delle zone, così scriverlo
 # spesso non riscrive lo stato prezioso del bilancio idrico.
