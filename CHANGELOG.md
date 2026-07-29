@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-07-29
+
 ### Corretto
 - **«7.5 min · 4 cicli» si leggeva come "7.5 minuti quattro volte".** Era
   il contrario: 7.5 minuti *in tutto*, spezzati in quattro passate da 1.9.
