@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-07-29
+
 ### Modificato
 - **La valvola che non risponde viene ritentata, non abbandonata.** Il
   controllo di apertura c'era già, ma al primo silenzio la linea veniva
