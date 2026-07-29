@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-29
+
 ### Corretto
 - **La lista segnava "in irrigazione" la linea sbagliata.** In cima si
   leggeva "Sprinkler Line 5, pausa di assorbimento" e nella lista sotto
