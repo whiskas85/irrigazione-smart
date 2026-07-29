@@ -8,6 +8,36 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Corretto
+- **Il pannello si legge anche dal telefono.** Ogni riga della pagina è
+  fatta allo stesso modo — un'icona, un testo, e in coda badge e comandi
+  — e su uno schermo da telefono la coda si prendeva quasi tutto: al
+  nome restavano quaranta pixel, dove *«Prato davanti alla casa»*
+  scendeva in verticale una lettera per riga. Nella scheda di un gruppo
+  il nome della linea arrivava a **zero pixel** di larghezza, coi
+  pulsanti di modifica spinti fuori dallo schermo. Ora sotto i 700 px la
+  coda va a capo: il nome tiene la prima riga insieme al suo
+  interruttore, badge e comandi stanno sotto, allineati a destra
+  - I sette giorni della settimana stanno in una riga sola invece di
+    spezzarsi in sei più uno
+  - Le maniglie dei vertici sulla mappa e i pulsanti crescono dove si
+    tocca con un dito invece che con un puntatore
+  - Le finestre di dialogo non sforano più su schermi stretti
+- **I grafici non sono più stirati.** Erano disegnati su una larghezza
+  fissa di 640 unità e poi schiacciati su quella vera: su un telefono le
+  date dell'asse uscivano compresse a metà, alte e strettissime, e anche
+  su desktop il testo era allungato di un decimo. Ora il disegno è fatto
+  sulla larghezza misurata, e si rifà quando quella cambia — il telefono
+  che ruota, la finestra che si stringe
+- **Tre riquadri di numeri e la barra del deficit erano invisibili.** Un
+  rinomino di classi CSS aveva staccato dalla loro grafica la griglia di
+  *Linee attive / Chiedono acqua / Tempo totale*, quella di *Accumulo di
+  oggi*, quella di *Posizione* e la barra del deficit di ogni linea: i
+  numeri si incolonnavano uno sotto l'altro e la barra non si vedeva più
+- La scheda attiva viene portata in vista quando la barra delle schede
+  non ci sta tutta, e il metodo di calcolo dell'ET0 non si spezza più in
+  tre righe a caratteri cubitali
+
 ## [1.7.0] - 2026-07-29
 
 ### Aggiunto

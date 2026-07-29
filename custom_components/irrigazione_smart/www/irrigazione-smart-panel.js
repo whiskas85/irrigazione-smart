@@ -243,12 +243,32 @@ class IrrigazioneSmartPanel extends HTMLElement {
     // un'altra dashboard. La pagina si riallinea da sola, più spesso
     // mentre l'irrigazione è in corso (la barra di progresso deve avanzare).
     this._schedulePoll();
+    this._watchWidth();
   }
 
   disconnectedCallback() {
     clearTimeout(this._timer);
     clearTimeout(this._softTimer);
     clearInterval(this._waitTimer);
+    if (this._resizeObs) this._resizeObs.disconnect();
+  }
+
+  /* I grafici sono disegnati alla larghezza vera del pannello (vedi
+     `_measureChartWidth`), quindi quando quella cambia — il telefono che
+     ruota, la barra laterale che si apre, la finestra che si stringe —
+     vanno rifatti, o restano disegnati per una misura che non c'è più. */
+  _watchWidth() {
+    if (this._resizeObs || !window.ResizeObserver) return;
+    this._resizeObs = new ResizeObserver(() => {
+      const larghezza = this._measureChartWidth();
+      // le variazioni minime non valgono un ridisegno dell'intera pagina
+      if (Math.abs(larghezza - (this._chartWidth || 0)) < 24) return;
+      this._chartWidth = larghezza;
+      if (this._isTyping() || this._mapBusy()) return;
+      if (this.shadowRoot.querySelector("ha-dialog, .dlg-fallback")) return;
+      this._render();
+    });
+    this._resizeObs.observe(this);
   }
 
   _schedulePoll() {
@@ -590,11 +610,20 @@ class IrrigazioneSmartPanel extends HTMLElement {
       bar.innerHTML = tabsHtml;
       bar._html = tabsHtml;
     }
+    // Su un telefono le schede non ci stanno tutte: la barra scorre, e
+    // quella attiva può restare fuori dallo schermo — la pagina cambia
+    // sotto le dita senza che si veda dove si è finiti.
+    if (bar) this._revealActiveTab(bar);
 
     if (!content) return;
 
     const wide = this._tab === "mappa" ? "content wide" : "content";
     if (content.className !== wide) content.className = wide;
+
+    // I grafici hanno bisogno della larghezza vera prima di essere
+    // disegnati, e la colonna cambia larghezza con la scheda: si misura
+    // dopo aver messo la classe, o si disegna per la scheda di prima.
+    this._chartWidth = this._measureChartWidth();
 
     const body = this._body();
     const bodyChanged = content._html !== body;
@@ -607,6 +636,24 @@ class IrrigazioneSmartPanel extends HTMLElement {
 
     this._updateMenuButton();
     if (tabsChanged || bodyChanged) this._bind();
+  }
+
+  /* Porta la scheda attiva dentro la parte visibile della barra.
+
+     Lo scorrimento si calcola a mano invece di usare `scrollIntoView`:
+     quello trascinerebbe anche la pagina, e la barra sta appiccicata in
+     cima proprio perché il contenuto non si muova sotto le dita. */
+  _revealActiveTab(bar) {
+    const active = bar.querySelector(".tab.active");
+    if (!active || bar.scrollWidth <= bar.clientWidth) return;
+
+    const barra = bar.getBoundingClientRect();
+    const scheda = active.getBoundingClientRect();
+    if (scheda.left < barra.left) {
+      bar.scrollLeft -= barra.left - scheda.left + 16;
+    } else if (scheda.right > barra.right) {
+      bar.scrollLeft += scheda.right - barra.right + 16;
+    }
   }
 
   /* Posizione di scorrimento dei contenitori che stanno scorrendo.
@@ -1363,10 +1410,35 @@ class IrrigazioneSmartPanel extends HTMLElement {
     return isNaN(d) ? "" : `${d.getDate()}/${d.getMonth() + 1}`;
   }
 
+  /* Larghezza in pixel che un grafico ha davvero a disposizione.
+
+     Gli SVG dei grafici sono stirati sulla larghezza della card
+     (`preserveAspectRatio="none"`): se il loro sistema di coordinate non
+     combacia coi pixel veri, insieme al disegno si stira anche il testo.
+     A 640 unità dentro a 330 pixel di telefono le date dell'asse escono
+     compresse a metà, alte e strettissime. Misurando lo spazio vero il
+     rapporto resta 1:1 e le scritte hanno la forma che devono avere. */
+  _measureChartWidth() {
+    const content = this.shadowRoot.querySelector(".content");
+    if (!content || !content.clientWidth) return 640;
+
+    // se un grafico è già in pagina, la sua larghezza è la misura esatta
+    const grafico = content.querySelector(".chart");
+    const disegnata = grafico ? grafico.getBoundingClientRect().width : 0;
+    if (disegnata) return Math.max(260, Math.round(disegnata));
+
+    // altrimenti si stima: la colonna meno il suo margine interno e
+    // quello della card, che è lo stesso
+    const stile = getComputedStyle(content);
+    const margine =
+      parseFloat(stile.paddingLeft || 0) + parseFloat(stile.paddingRight || 0);
+    return Math.max(260, Math.round(content.clientWidth - margine * 2));
+  }
+
   /* Struttura comune: cornice, griglia orizzontale a filo, asse discreto.
      Nessuna griglia verticale e nessun tratteggio: aggiungono rumore e
-     basta. */
-  _chartFrame(id, { width = 640, height = 170, pad = 28 } = {}) {
+     basta. La larghezza è quella misurata, non un numero fisso. */
+  _chartFrame(id, { width = this._chartWidth || 640, height = 170, pad = 28 } = {}) {
     return {
       id, width, height,
       left: pad + 18, right: width - 10,
@@ -1529,10 +1601,15 @@ class IrrigazioneSmartPanel extends HTMLElement {
             .join("")}</tr>`
       )
       .join("");
-    return `<table class="data-table">
-      <thead><tr><th>Giorno</th>${colonne.map((c) => `<th>${esc(c.label)}</th>`).join("")}</tr></thead>
-      <tbody>${righe}</tbody>
-    </table>`;
+    // La tabella scorre per conto suo: con più gruppi le colonne
+    // superano la larghezza di un telefono, e senza questo riquadro a
+    // scorrere sarebbe l'intera pagina — trascinando via anche le card.
+    return `<div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th>Giorno</th>${colonne.map((c) => `<th>${esc(c.label)}</th>`).join("")}</tr></thead>
+        <tbody>${righe}</tbody>
+      </table>
+    </div>`;
   }
 
   // ---------------------------------------------------------------- LOG
@@ -1869,7 +1946,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
           </div>
           <ha-switch data-master ${on ? "checked" : ""}></ha-switch>
         </div>
-        <div class="c-grid">
+        <div class="grid">
           <div class="cell"><span class="k">Linee attive</span><span class="v">${enabled}<span class="of">/${zones.length}</span></span></div>
           <div class="cell"><span class="k">Chiedono acqua</span><span class="v">${running.length}</span></div>
           <div class="cell"><span class="k">Tempo totale</span><span class="v">${sched.total_minutes || 0}<span class="of"> min</span></span></div>
@@ -2261,7 +2338,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
         </ha-icon-button>
       </div>
 
-      <div class="c-bar" title="Deficit ${deficit.toFixed(1)} mm su TAW ${taw.toFixed(1)} mm">
+      <div class="bar" title="Deficit ${deficit.toFixed(1)} mm su TAW ${taw.toFixed(1)} mm">
         <div class="bar-fill${deficit >= threshold ? " over" : ""}" style="width:${pct}%"></div>
         <div class="bar-thr" style="left:${thrPct}%"></div>
       </div>
@@ -3581,13 +3658,13 @@ class IrrigazioneSmartPanel extends HTMLElement {
             : ""
         }
         <div class="form-section">Accumulo di oggi</div>
-        <div class="c-grid">
+        <div class="grid">
           <div class="cell"><span class="k">T min</span><span class="v">${num(m.t_min, "°C")}</span></div>
           <div class="cell"><span class="k">T max</span><span class="v">${num(m.t_max, "°C")}</span></div>
           <div class="cell"><span class="k">Pioggia</span><span class="v">${num(m.rain_mm, "mm")}</span></div>
           <div class="cell"><span class="k">Umidità media</span><span class="v">${num(m.rh_mean, "%", 0)}</span></div>
           <div class="cell"><span class="k">Vento medio</span><span class="v">${num(m.wind_mean_kmh, "km/h")}</span></div>
-          <div class="cell"><span class="k">Metodo</span><span class="v">${esc(method || "—")}</span></div>
+          <div class="cell wide"><span class="k">Metodo</span><span class="v">${esc(method || "—")}</span></div>
         </div>
       </div></ha-card>`;
   }
@@ -3704,7 +3781,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
     return `<ha-card><div class="inner">
         <div class="card-head"><ha-icon icon="mdi:map-marker-outline"></ha-icon><h2>Posizione</h2></div>
         <p class="muted small nomargin">Serve al calcolo della radiazione extraterrestre, che dipende da latitudine e giorno dell'anno.</p>
-        <div class="c-grid">
+        <div class="grid">
           <div class="cell"><span class="k">Latitudine</span><span class="v">${this._fmtCoord(sys.latitude)}</span></div>
           <div class="cell"><span class="k">Longitudine</span><span class="v">${this._fmtCoord(sys.longitude)}</span></div>
           <div class="cell"><span class="k">Altitudine</span><span class="v">${sys.elevation ?? "—"} m</span></div>
@@ -4452,7 +4529,11 @@ class IrrigazioneSmartPanel extends HTMLElement {
               background: var(--app-header-background-color, var(--primary-color));
               color: var(--app-header-text-color, #fff);
               position: sticky; top: 0; z-index: 3;
-              box-shadow: 0 2px 4px rgba(0,0,0,.18); }
+              box-shadow: 0 2px 4px rgba(0,0,0,.18);
+              scrollbar-width: none; }
+      /* la barra si scorre col dito: la barretta di scorrimento ruberebbe
+         solo altezza, e la scheda tagliata a metà dice già che continua */
+      .tabs::-webkit-scrollbar { display: none; }
       .tab { display: flex; align-items: center; gap: 6px; padding: 12px 16px; border: none;
              background: none; color: inherit; opacity: .7; cursor: pointer; font-size: 14px;
              font-family: inherit; white-space: nowrap; border-bottom: 3px solid transparent; }
@@ -4733,11 +4814,21 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 12px; margin-top: 10px; }
       .cell { display: flex; flex-direction: column; gap: 2px; }
       .cell .k { font-size: 11px; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: .03em; }
-      .cell .v { font-size: 18px; font-weight: 600; color: var(--primary-text-color); }
+      .cell .v { font-size: 18px; font-weight: 600; color: var(--primary-text-color);
+                 overflow-wrap: anywhere; }
+      /* Una cella con dentro una frase e non un numero: «Penman-Monteith
+         FAO-56» in una colonna da novantasei pixel si spezza in tre righe
+         a caratteri cubitali. Prende tutta la larghezza e il corpo del
+         testo, non quello delle cifre. */
+      .cell.wide { grid-column: 1 / -1; }
+      .cell.wide .v { font-size: 14px; font-weight: 500; }
       .cell .v .of { font-size: 13px; font-weight: 400; color: var(--secondary-text-color); }
 
       .et0 { display: flex; align-items: center; gap: 14px; padding: 4px 0 2px; }
-      .et0-value { font-size: 30px; font-weight: 600; color: var(--primary-text-color); line-height: 1; }
+      /* il numero e la sua unità sono una cosa sola: separati da un a capo
+         diventano un numero senza unità e un'unità senza numero */
+      .et0-value { font-size: 30px; font-weight: 600; color: var(--primary-text-color);
+                   line-height: 1; white-space: nowrap; flex: 0 0 auto; }
       .et0-value span { font-size: 15px; font-weight: 400; color: var(--secondary-text-color); }
       .et0-meta { display: flex; flex-direction: column; min-width: 0; }
 
@@ -4760,6 +4851,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .swatch { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 auto; }
 
       /* Vista tabellare: l'equivalente leggibile di ogni grafico */
+      .table-wrap { overflow-x: auto; }
       .data-table { display: none; width: 100%; border-collapse: collapse;
                     margin-top: 12px; font-size: 13px; }
       .data-table.shown { display: table; }
@@ -4783,7 +4875,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
          del frontend non sono affidabili da costruire fuori da HA. */
       .btn { font-family: inherit; font-size: 14px; font-weight: 500; cursor: pointer;
              padding: 9px 18px; border-radius: 24px; border: none;
-             background: none; color: var(--primary-color);
+             background: none; color: var(--primary-color); white-space: nowrap;
              letter-spacing: .02em; transition: background-color .15s; }
       .btn:hover { background: color-mix(in srgb, var(--primary-color) 12%, transparent); }
       .btn:disabled { opacity: .5; cursor: default; }
@@ -4851,6 +4943,71 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .form-section { font-size: 13px; font-weight: 600; color: var(--secondary-text-color);
                       text-transform: uppercase; letter-spacing: .04em; margin-top: 6px; }
       .danger { --mdc-theme-primary: var(--error-color, #db4437); }
+
+      /* ---------------------------------------------------------- telefono
+
+         Ogni riga di questo pannello è fatta allo stesso modo: un'icona,
+         un testo che si allunga, e in coda i badge e i comandi. Su un
+         telefono la coda si prende quasi tutto e al testo restano
+         quaranta pixel, dove il nome della linea scende in verticale una
+         lettera per riga — è così che «Prato davanti alla casa» diventa
+         illeggibile proprio sulla schermata che si guarda dal giardino.
+
+         Sotto la soglia la coda va a capo. Il punto in cui la riga si
+         spezza non si lascia decidere a come cadono le larghezze: lo
+         segna un elemento vuoto largo quanto la riga, messo in mezzo
+         con la proprietà order. Si aggiunge solo dove una coda esiste
+         davvero, altrimenti aprirebbe un vuoto sotto ogni riga. */
+      @media (max-width: 700px) {
+        .content { padding: 12px; }
+        .inner { padding: 14px; }
+
+        .row, .zone-head, .card-head, .master-row { flex-wrap: wrap; }
+        /* il testo tiene la prima riga insieme all'interruttore: è la
+           coppia che si guarda per prima */
+        .row > .row-main,
+        .zone-head > .zone-title,
+        .master-row > .master-main { flex: 1 1 120px; }
+
+        .row > .badge, .row > .btn, .row > ha-icon-button,
+        .zone-head > .badge, .zone-head > ha-icon-button,
+        .master-row > .btn { order: 3; }
+        .row:has(> .badge, > .btn, > ha-icon-button)::after,
+        .zone-head:has(> .badge, > ha-icon-button)::after,
+        .master-row:has(> .btn)::after {
+          content: ""; order: 2; flex: 1 0 100%; height: 0;
+        }
+        /* i comandi restano in fondo a destra dove li si cerca: il primo
+           della coda spinge in là sé stesso e quelli che lo seguono */
+        .row > .btn:first-of-type,
+        .row:not(:has(> .btn)) > ha-icon-button:first-of-type,
+        .zone-head:not(:has(> .btn)) > ha-icon-button:first-of-type,
+        .master-row > .btn { margin-left: auto; }
+
+        /* la maniglia per riordinare non si trascina col pollice: resta,
+           ma non ruba larghezza al nome */
+        .zone-head > .drag-handle { --mdc-icon-size: 20px; }
+
+        /* i sette giorni stanno in una riga sola: una settimana spezzata
+           in sei più uno non si legge come una settimana */
+        .day-chips { display: grid; gap: 5px;
+                     grid-template-columns: repeat(7, minmax(0, 1fr)); }
+        .day-chip { min-width: 0; padding: 10px 4px; }
+
+        .form { min-width: 0; }
+        .dlg-box { padding: 16px; max-width: 96vw; max-height: 88dvh; }
+        .cycle-grid { grid-template-columns: minmax(0, 1fr); }
+      }
+
+      /* Comandi grandi abbastanza per un dito, non per un puntatore:
+         sedici pixel di maniglia si mancano, e sulla mappa mancarli
+         significa spostare il vertice sbagliato. */
+      @media (pointer: coarse) {
+        .btn { min-height: 40px; padding: 10px 18px; }
+        .day-chip { min-height: 40px; }
+        .map-vertex { width: 22px; height: 22px; margin: -11px 0 0 -11px; }
+        .map-mid { width: 15px; height: 15px; margin: -7.5px 0 0 -7.5px; opacity: .7; }
+      }
     `;
   }
 }
