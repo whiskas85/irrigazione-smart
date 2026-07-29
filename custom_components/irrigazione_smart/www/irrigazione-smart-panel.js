@@ -456,34 +456,102 @@ class IrrigazioneSmartPanel extends HTMLElement {
 
   // ------------------------------------------------------------- render
 
+  /* Ridisegno senza buttare via la pagina.
+
+     Rifare `innerHTML` dell'intero shadow root distrugge anche il
+     contenitore che scorre, e il browser non ha più niente su cui
+     tenere la posizione: a ogni giro di aggiornamento — uno ogni trenta
+     secondi, tre al secondo mentre irriga — la pagina saltava in cima.
+     Si ricostruisce quindi solo ciò che è cambiato davvero: l'ossatura
+     una volta sola, le schede quando cambiano, il corpo quando il suo
+     contenuto è diverso da quello già a schermo. */
   _render() {
-    this.shadowRoot.innerHTML = `
-      <style>${this._css()}</style>
-      <ha-top-app-bar-fixed>
-        <ha-menu-button slot="navigationIcon"></ha-menu-button>
-        <div slot="title" class="app-title">
-          <ha-icon icon="mdi:sprinkler-variant"></ha-icon>
-          <span>Irrigazione Smart</span>
-          ${
-            this._overview && this._overview.version
-              ? `<span class="app-version" title="Versione in esecuzione">${esc(this._overview.version)}</span>`
-              : ""
-          }
-        </div>
-        <div class="tabs">
-          ${this._tabs()
-            .map(
-              (t) => `<button class="tab${t.id === this._tab ? " active" : ""}" data-tab="${t.id}">
-                      <ha-icon icon="${t.icon}"></ha-icon><span>${t.label}</span>
-                    </button>`
-            )
-            .join("")}
-        </div>
-        <div class="content${this._tab === "mappa" ? " wide" : ""}">${this._body()}</div>
-      </ha-top-app-bar-fixed>
-    `;
+    const sr = this.shadowRoot;
+    let content = sr.querySelector(".content");
+
+    if (!content) {
+      sr.innerHTML = `
+        <style>${this._css()}</style>
+        <ha-top-app-bar-fixed>
+          <ha-menu-button slot="navigationIcon"></ha-menu-button>
+          <div slot="title" class="app-title">
+            <ha-icon icon="mdi:sprinkler-variant"></ha-icon>
+            <span>Irrigazione Smart</span>
+            <span class="app-version" title="Versione in esecuzione"></span>
+          </div>
+          <div class="tabs"></div>
+          <div class="content"></div>
+        </ha-top-app-bar-fixed>
+      `;
+      content = sr.querySelector(".content");
+    }
+
+    const versione = (this._overview && this._overview.version) || "";
+    const chip = sr.querySelector(".app-version");
+    if (chip && chip.textContent !== versione) chip.textContent = versione;
+
+    const tabs = this._tabs();
+    const tabsHtml = tabs
+      .map(
+        (t) => `<button class="tab${t.id === this._tab ? " active" : ""}" data-tab="${t.id}">
+                  <ha-icon icon="${t.icon}"></ha-icon><span>${t.label}</span>
+                </button>`
+      )
+      .join("");
+
+    const bar = sr.querySelector(".tabs");
+    const tabsChanged = !!bar && bar._html !== tabsHtml;
+    if (tabsChanged) {
+      bar.innerHTML = tabsHtml;
+      bar._html = tabsHtml;
+    }
+
+    if (!content) return;
+
+    const wide = this._tab === "mappa" ? "content wide" : "content";
+    if (content.className !== wide) content.className = wide;
+
+    const body = this._body();
+    const bodyChanged = content._html !== body;
+    if (bodyChanged) {
+      const scroll = this._captureScroll();
+      content.innerHTML = body;
+      content._html = body;
+      this._restoreScroll(scroll);
+    }
+
     this._updateMenuButton();
-    this._bind();
+    if (tabsChanged || bodyChanged) this._bind();
+  }
+
+  /* Posizione di scorrimento dei contenitori che stanno scorrendo.
+
+     Quale sia dipende da come Home Assistant impagina il pannello — la
+     barra fissa, l'host, o la pagina stessa — quindi invece di
+     indovinarlo si risale la catena e si prende nota di chiunque sia
+     spostato. Chi è già in cima non serve toccarlo. */
+  _captureScroll() {
+    const saved = [];
+    let node = this.shadowRoot.querySelector(".content");
+    while (node) {
+      if (node.scrollTop > 0) saved.push([node, node.scrollTop]);
+      const root = node.getRootNode && node.getRootNode();
+      node = node.parentElement || (root && root.host) || null;
+    }
+    const page = document.scrollingElement;
+    if (page && page.scrollTop > 0) saved.push([page, page.scrollTop]);
+    return saved;
+  }
+
+  _restoreScroll(saved) {
+    if (!saved.length) return;
+    const apply = () => saved.forEach(([node, top]) => {
+      node.scrollTop = top;
+    });
+    apply();
+    // di nuovo al fotogramma dopo: se il corpo nuovo è più corto, il
+    // browser accorcia lo scorrimento prima di rifare il calcolo
+    requestAnimationFrame(apply);
   }
 
   _bind() {
@@ -2340,6 +2408,11 @@ class IrrigazioneSmartPanel extends HTMLElement {
       return;
     }
     main.innerHTML = this._mapTabInner();
+    // il corpo a schermo ora è diverso da quello dell'ultimo ridisegno
+    // completo: senza aggiornare il promemoria, `_render` confronterebbe
+    // con una fotografia vecchia
+    const content = this.shadowRoot.querySelector(".content");
+    if (content) content._html = this._body();
     this._bindMap();
     this._renderCards();
   }

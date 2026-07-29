@@ -8,6 +8,18 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Corretto
+- **La pagina saltava in cima a ogni aggiornamento.** Il ridisegno rifaceva
+  l'intero pannello, distruggendo anche il contenitore che scorre: il
+  browser non aveva più niente su cui tenere la posizione, e ogni trenta
+  secondi — tre al secondo mentre l'irrigazione è in corso — si tornava
+  in testa. Ora si ricostruisce solo ciò che è cambiato davvero:
+  l'ossatura una volta sola, le schede quando cambiano, il corpo quando
+  il suo contenuto è diverso da quello già a schermo. Un aggiornamento
+  che non cambia niente non tocca più il DOM, quindi niente sfarfallio
+  sugli interruttori, e la posizione viene comunque rimessa dov'era se
+  il contenuto si accorcia
+
 ## [1.2.0] - 2026-07-28
 
 ### Modificato
