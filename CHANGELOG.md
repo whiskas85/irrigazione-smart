@@ -8,6 +8,23 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Corretto
+- **«Ferma» ferma tutto l'impianto, non la linea.** Il pulsante stava su
+  una scheda intitolata al nome della linea in corso, e si leggeva come
+  "salta questa linea": annulla invece l'intera sequenza, e non si torna
+  indietro. Ora si chiama **Ferma tutto**, ovunque compaia
+
+### Aggiunto
+- **La scheda principale dice cosa sta succedendo, e permette di
+  fermare.** Mentre irrigava non diceva niente e non offriva niente:
+  l'unico comando per fermare era sulla scheda della linea in corso.
+  Ora c'è una riga di stato — «Sta irrigando Sprinkler Line 5 · passata 2
+  di 4», «Il terreno sta assorbendo · Line 1 riprende fra 12 min»,
+  «Cambio linea · Line 2 apre fra 30 s» — col pulsante di arresto
+  accanto. La frase è la stessa che compare sulla scheda dell'irrigazione
+  in corso: due riquadri che descrivono lo stesso istante non possono
+  raccontarlo in due modi diversi
+
 ## [1.3.0] - 2026-07-29
 
 ### Corretto

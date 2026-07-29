@@ -1665,10 +1665,15 @@ class IrrigazioneSmartPanel extends HTMLElement {
         <div class="master-main">
           <span class="master-title">${esc(r.zone_name || "Irrigazione in corso")}</span>
           <span class="sub">${esc(phase)}${
-            r.cycles > 1 ? ` · ciclo ${r.cycle}/${r.cycles}` : ""
+            r.cycles > 1 ? ` · passata ${r.cycle}/${r.cycles}` : ""
           }</span>
         </div>
-        ${this._button("stop-all", "Ferma", { danger: true })}
+        ${
+          // "Ferma" su una scheda intitolata a una linea si legge come
+          // "salta questa linea". Ferma invece l'intera sequenza, e non
+          // c'è modo di tornare indietro: il nome deve dirlo.
+          this._button("stop-all", "Ferma tutto", { danger: true })
+        }
       </div>
       ${
         r.phase === "irrigazione"
@@ -1797,6 +1802,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
           <div class="cell"><span class="k">Chiedono acqua</span><span class="v">${running.length}</span></div>
           <div class="cell"><span class="k">Tempo totale</span><span class="v">${sched.total_minutes || 0}<span class="of"> min</span></span></div>
         </div>
+        ${this._activityRow()}
         ${this._overallProgress()}
         ${this._flowRow()}
         ${
@@ -1805,6 +1811,65 @@ class IrrigazioneSmartPanel extends HTMLElement {
             : ""
         }
       </div></ha-card>`;
+  }
+
+  /* Riga di stato sulla scheda principale, con il comando per fermare.
+
+     Mentre irrigava, questa scheda non diceva niente e non offriva
+     niente: l'unico pulsante per fermare stava sulla scheda della linea
+     in corso, dove sembrava riguardare solo quella linea. */
+  _activityRow() {
+    const attivita = this._activityText();
+    if (!attivita) return "";
+
+    return `<div class="row activity">
+      <ha-icon icon="${attivita.icona}"></ha-icon>
+      <div class="row-main">
+        <span class="row-label">${esc(attivita.titolo)}</span>
+        <span class="sub">${esc(attivita.sub)}</span>
+      </div>
+      ${this._button("stop-all", "Ferma tutto", { danger: true })}
+    </div>`;
+  }
+
+  /* Cosa sta facendo l'impianto in questo momento, in una frase.
+
+     La stessa per la scheda principale e per quella dell'irrigazione in
+     corso: due riquadri che descrivono lo stesso istante devono dire la
+     stessa cosa, o si finisce a leggere due versioni diverse. */
+  _activityText() {
+    const r = this._overview.running || {};
+    if (!r.active) return null;
+
+    const nome = r.zone_name || "";
+    const passata =
+      r.cycles > 1 ? ` · passata ${r.cycle || 1} di ${r.cycles}` : "";
+    const manca =
+      r.wait_remaining_min != null
+        ? this._waitText(r.wait_remaining_min).replace("mancano ", "fra ")
+        : "";
+
+    if (r.phase === "assorbimento") {
+      return {
+        titolo: "Il terreno sta assorbendo",
+        sub: nome
+          ? `nessun'altra linea da irrigare · ${nome} riprende ${manca}${passata}`
+          : `nessun'altra linea da irrigare · si riprende ${manca}`,
+        icona: "mdi:water-percent",
+      };
+    }
+    if (r.phase === "pausa_tra_linee") {
+      return {
+        titolo: "Cambio linea",
+        sub: nome ? `${nome} apre ${manca}${passata}` : `si riprende ${manca}`,
+        icona: "mdi:swap-horizontal",
+      };
+    }
+    return {
+      titolo: nome ? `Sta irrigando ${nome}` : "Irrigazione in corso",
+      sub: `acqua in uscita adesso${passata}`,
+      icona: "mdi:sprinkler-variant",
+    };
   }
 
   /* A che punto è l'intera sequenza.
@@ -2362,7 +2427,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
       return `<div class="map-toolbar">
         ${
           busy
-            ? this._button("stop-all", "Ferma", { danger: true })
+            ? this._button("stop-all", "Ferma tutto", { danger: true })
             : this._button("run-all", "Irriga tutte le aree", { primary: true })
         }
         <span class="spacer"></span>
@@ -4550,6 +4615,9 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .line-prog .bar.done .bar-fill { background: var(--success-color, #43a047); }
       .line-prog .bar.failed .bar-fill { background: var(--error-color, #db4437); }
       .overall { margin-top: 14px; }
+      .row.activity { background: color-mix(in srgb, var(--info-color, var(--primary-color)) 10%, transparent);
+                      border-radius: 10px; padding: 10px 12px; margin-top: 12px; }
+      .row.activity ha-icon { color: var(--info-color, var(--primary-color)); }
       .bar-thr { position: absolute; top: -2px; width: 2px; height: 12px; background: var(--primary-text-color); opacity: .55; }
 
       .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 12px; margin-top: 10px; }
