@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-07-29
+
 ### Corretto
 - **Il bilancio idrico si aggiornava solo ai riavvii di Home Assistant.**
   Il ciclo che legge il meteo e fa crescere il deficit doveva girare ogni
