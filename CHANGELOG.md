@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-07-29
+
 ### Aggiunto
 - **La valvola che non chiude è ora il caso più serio del sistema.** Una
   valvola che non apre lascia un prato asciutto; una che non chiude allaga
