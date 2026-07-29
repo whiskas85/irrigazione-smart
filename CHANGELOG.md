@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-07-29
+
 ### Modificato
 - **Il badge della batteria resta in alto a destra della linea.** Sul
   telefono era finito a capo insieme agli altri stati: non è uno stato
