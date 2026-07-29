@@ -100,6 +100,11 @@ GROUP_SCHEDULE_FIELDS: tuple[str, ...] = ("window_start", "window_end", "days", 
 ZONE_FIELDS: dict[str, Any] = {
     "name": "Nuova zona",
     "valve_entity": None,
+    # Batteria della valvola, per gli irrigatori che non sono a filo.
+    # Una batteria scarica non blocca niente: fa però fallire l'apertura
+    # nel cuore della notte, e chi guarda la pagina deve poterlo prevedere
+    # invece di scoprirlo dal prato secco.
+    "battery_entity": None,
     "enabled": True,
     "zone_type": "prato_microterme",
     "order": 0,

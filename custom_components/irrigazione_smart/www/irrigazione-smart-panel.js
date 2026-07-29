@@ -410,6 +410,78 @@ class IrrigazioneSmartPanel extends HTMLElement {
     return running.zone_id || null;
   }
 
+  /* Stato della batteria di una linea, se ne ha una.
+
+     Due forme possibili, perché i due modi di dichiararla in Home
+     Assistant sono entrambi diffusi: un sensore con la percentuale, o un
+     binary_sensor che vale "on" quando è scarica. Sotto il 15% si
+     colora di rosso — una valvola a batteria che non apre non irriga e
+     basta, e lo si scopre dal prato secco il giorno dopo. */
+  _batteryInfo(zone) {
+    const id = zone && zone.battery_entity;
+    if (!id || !this._hass) return null;
+
+    const st = this._hass.states[id];
+    if (!st) return { id, missing: true, label: "batteria non disponibile", level: "warn" };
+
+    const stato = String(st.state).toLowerCase();
+    if (stato === "unavailable" || stato === "unknown") {
+      return { id, missing: true, label: "batteria non disponibile", level: "warn" };
+    }
+
+    const dc = (st.attributes || {}).device_class;
+    if (id.startsWith("binary_sensor.") || stato === "on" || stato === "off") {
+      // per device_class battery, "on" significa scarica
+      const scarica = stato === "on";
+      return {
+        id, scarica,
+        label: scarica ? "batteria scarica" : "batteria ok",
+        icona: scarica ? "mdi:battery-alert-variant-outline" : "mdi:battery",
+        level: scarica ? "bad" : "ok",
+      };
+    }
+
+    const pct = Number(st.state);
+    if (!Number.isFinite(pct)) {
+      return { id, missing: true, label: "batteria non leggibile", level: "warn" };
+    }
+
+    const arrotondato = Math.max(0, Math.min(100, Math.round(pct)));
+    return {
+      id,
+      percent: arrotondato,
+      unit: (st.attributes || {}).unit_of_measurement || "%",
+      label: `${arrotondato}%`,
+      icona: this._batteryIcon(arrotondato),
+      level: arrotondato < 15 ? "bad" : arrotondato < 30 ? "warn" : "ok",
+      device_class: dc,
+    };
+  }
+
+  _batteryIcon(percent) {
+    if (percent <= 5) return "mdi:battery-alert-variant-outline";
+    if (percent >= 95) return "mdi:battery";
+    return `mdi:battery-${Math.round(percent / 10) * 10}`;
+  }
+
+  /* Il badge che compare accanto alla linea. */
+  _batteryBadge(zone) {
+    const b = this._batteryInfo(zone);
+    if (!b) return "";
+
+    const titolo =
+      b.level === "bad"
+        ? "Batteria quasi esaurita: la valvola potrebbe non aprire"
+        : b.level === "warn"
+        ? "Batteria da tenere d'occhio"
+        : "Batteria della valvola";
+
+    return `<span class="badge batt b-${b.level}" title="${esc(titolo)}">
+      <ha-icon icon="${esc(b.icona || "mdi:battery-unknown")}"></ha-icon>
+      <span${b.percent != null ? ` data-entity="${esc(b.id)}"` : ""}>${esc(b.label)}</span>
+    </span>`;
+  }
+
   _liveState(entityId) {
     if (!entityId || !this._hass) return null;
     const st = this._hass.states[entityId];
@@ -1981,6 +2053,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
           <span class="sub">${deficit.toFixed(1)} / ${thr.toFixed(1)} mm${this._lastRunText(z)}</span>
           ${this._lineProgress(z)}
         </div>
+        ${this._batteryBadge(z)}
         ${state}
         ${
           z.enabled && !busy
@@ -2178,6 +2251,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
           <span class="zone-name">${esc(z.name)}</span>
           <span class="sub">${esc(label(ZONE_TYPE_LABELS, z.zone_type))} · ${esc(label(SOIL_LABELS, c.soil))} · ${esc(label(EMITTER_LABELS, z.emitter))}</span>
         </div>
+        ${this._batteryBadge(z)}
         ${status}
         <ha-icon-button class="edit-zone" data-id="${z.id}" label="Modifica">
           <ha-icon icon="mdi:pencil"></ha-icon>
@@ -3988,6 +4062,16 @@ class IrrigazioneSmartPanel extends HTMLElement {
         helper: "L'entità che apre la linea. Senza, la zona non può irrigare",
       },
       {
+        key: "battery_entity",
+        label: "Batteria della valvola",
+        type: "entity",
+        domains: ["sensor", "binary_sensor"],
+        helper:
+          "Solo per gli irrigatori a batteria. Va bene sia un sensore con " +
+          "la percentuale sia uno che dice soltanto se è scarica. " +
+          "Facoltativa: se manca, il badge non compare",
+      },
+      {
         key: "zone_type", label: "Tipo di zona", type: "select",
         options: opts.zone_types || [], labels: ZONE_TYPE_LABELS,
       },
@@ -4056,6 +4140,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
     const initial = {
       name: z.name,
       valve_entity: z.valve_entity || undefined,
+      battery_entity: z.battery_entity || undefined,
       zone_type: z.zone_type,
       emitter: z.emitter,
       icon: z.icon || undefined,
@@ -4085,6 +4170,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
         });
         if (!data.name) data.name = "Nuova zona";
         if (!data.valve_entity) data.valve_entity = null;
+        if (!data.battery_entity) data.battery_entity = null; // svuotato = rimossa
         if (!data.icon) data.icon = null;
 
         if (zone) await this._mutate("POST", `zones/${zone.id}`, data);
@@ -4618,6 +4704,15 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .row.activity { background: color-mix(in srgb, var(--info-color, var(--primary-color)) 10%, transparent);
                       border-radius: 10px; padding: 10px 12px; margin-top: 12px; }
       .row.activity ha-icon { color: var(--info-color, var(--primary-color)); }
+
+      /* batteria della valvola: normale finché non serve guardarla */
+      .badge.batt { display: inline-flex; align-items: center; gap: 4px;
+                    background: var(--divider-color); color: var(--secondary-text-color); }
+      .badge.batt ha-icon { --mdc-icon-size: 16px; }
+      .badge.batt.b-warn { background: color-mix(in srgb, var(--warning-color, #ffa600) 22%, transparent);
+                           color: var(--warning-color, #ffa600); }
+      .badge.batt.b-bad { background: color-mix(in srgb, var(--error-color, #db4437) 20%, transparent);
+                          color: var(--error-color, #db4437); font-weight: 600; }
       .bar-thr { position: absolute; top: -2px; width: 2px; height: 12px; background: var(--primary-text-color); opacity: .55; }
 
       .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 12px; margin-top: 10px; }

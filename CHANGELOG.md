@@ -8,6 +8,24 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Aggiunto
+- **Batteria della valvola, per linea e per aiuola.** Gli irrigatori a
+  batteria muoiono in silenzio: la valvola non apre, la linea non irriga,
+  e lo si scopre dal prato secco qualche giorno dopo. Ora ogni linea può
+  puntare la propria batteria, e il badge compare in dashboard accanto al
+  nome — grigio finché non serve guardarlo, ambra sotto il 30%, rosso
+  sotto il 15% con scritto perché importa: *«la valvola potrebbe non
+  aprire»*
+  - Vanno bene entrambi i modi in cui Home Assistant la dichiara: un
+    sensore con la percentuale, o un `binary_sensor` che dice soltanto se
+    è scarica
+  - Se il sensore diventa non disponibile lo scrive, invece di far
+    sparire il badge: una batteria che non risponde è essa stessa una
+    notizia
+  - La percentuale si aggiorna dal vivo, senza aspettare il giro di
+    ricarica della pagina
+  - Il campo è facoltativo: senza, il badge non compare e niente cambia
+
 ## [1.4.0] - 2026-07-29
 
 ### Corretto
