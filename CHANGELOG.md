@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-07-29
+
 ### Corretto
 - **Il pannello si legge anche dal telefono.** Ogni riga della pagina è
   fatta allo stesso modo — un'icona, un testo, e in coda badge e comandi
