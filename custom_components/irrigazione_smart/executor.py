@@ -32,6 +32,8 @@ from .const import (
     EVENT_ZONE_STARTED,
     SIGNAL_STATE_CHANGED,
     VALVE_CONFIRM_TIMEOUT,
+    VALVE_RETRIES,
+    VALVE_RETRY_PAUSE_S,
     zone_category,
 )
 from .hydro import (
@@ -41,6 +43,7 @@ from .hydro import (
     interleave_cycles,
     resolve_zone_params,
 )
+from .logbook import WARNING, get_log
 from .store import IrrigazioneStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -658,6 +661,84 @@ class IrrigationExecutor:
             },
         )
 
+    async def _open_with_retries(self, run: _ZoneRun) -> bool:
+        """Apre la valvola, riprovando prima di rinunciare.
+
+        Il principio resta quello di sempre: non si dà mai per scontato
+        che una linea stia irrigando solo perché è stato dato il comando.
+        Ma un silenzio solo non prova che la valvola sia guasta — una
+        radio o una batteria possono perdere un comando e rispondere al
+        successivo, e rinunciare al primo tentativo salta un'irrigazione
+        per un pacchetto perso.
+
+        Dopo l'ultimo tentativo la linea viene saltata **per questa
+        irrigazione**: le passate rimaste non si riprovano, perché una
+        valvola che ha taciuto tre volte di fila non risponderà fra mezz'ora.
+        """
+        system = self._store.system
+        tentativi = 1 + max(0, int(system.get("valve_retries", VALVE_RETRIES) or 0))
+        activity = get_log(self._hass)
+
+        for tentativo in range(1, tentativi + 1):
+            if await self._open_confirmed(run.valve):
+                if tentativo > 1:
+                    _LOGGER.info(
+                        "La valvola %s ha confermato al tentativo %d",
+                        run.valve,
+                        tentativo,
+                    )
+                    if activity is not None:
+                        activity.add(
+                            "zone_started",
+                            f"{run.name}: valvola aperta al tentativo "
+                            f"{tentativo} di {tentativi}",
+                            zone_id=run.zone_id,
+                        )
+                return True
+
+            # il comando resta appeso: si richiude prima di riprovare,
+            # così il tentativo dopo parte da una condizione nota
+            await self._close(run.valve)
+
+            if tentativo >= tentativi:
+                break
+
+            _LOGGER.warning(
+                "La valvola %s della linea %s non ha confermato "
+                "(tentativo %d di %d): riprovo",
+                run.valve,
+                run.name,
+                tentativo,
+                tentativi,
+            )
+            if activity is not None:
+                activity.add(
+                    "zone_failed",
+                    f"{run.name}: nessuna conferma dalla valvola "
+                    f"(tentativo {tentativo} di {tentativi}), riprovo",
+                    level=WARNING,
+                    zone_id=run.zone_id,
+                )
+
+            if not await self._pause(VALVE_RETRY_PAUSE_S / 60.0):
+                run.abort_reason = "master spento durante i tentativi di apertura"
+                return False
+
+        _LOGGER.error(
+            "La valvola %s della linea %s non ha confermato l'apertura "
+            "in %d tentativi: linea saltata",
+            run.valve,
+            run.name,
+            tentativi,
+        )
+        self._fire_failed(
+            run.zone_id,
+            self._store.zones.get(run.zone_id) or {},
+            f"la valvola {run.valve} non ha confermato l'apertura "
+            f"in {tentativi} tentativi",
+        )
+        return False
+
     async def _run_cycle(self, run: _ZoneRun, cycle: int) -> bool:
         """Una singola passata: apri, sorveglia, chiudi.
 
@@ -681,19 +762,7 @@ class IrrigationExecutor:
         )
 
         try:
-            if not await self._open_confirmed(run.valve):
-                _LOGGER.error(
-                    "La valvola %s della linea %s non ha confermato "
-                    "l'apertura: linea saltata",
-                    run.valve,
-                    run.name,
-                )
-                await self._close(run.valve)
-                self._fire_failed(
-                    run.zone_id,
-                    self._store.zones.get(run.zone_id) or {},
-                    f"la valvola {run.valve} non ha confermato l'apertura",
-                )
+            if not await self._open_with_retries(run):
                 return False
 
             run.confirmed = True

@@ -67,6 +67,17 @@ SIGNAL_STATE_CHANGED: Final = f"{DOMAIN}_state_changed"
 # comando: senza conferma la linea viene saltata.
 VALVE_CONFIRM_TIMEOUT: Final = 30
 
+# Tentativi aggiuntivi dopo il primo, prima di rinunciare alla linea.
+# Una valvola radio o a batteria può perdere un comando senza essere
+# guasta: rinunciare al primo silenzio salta un'irrigazione per un
+# pacchetto perso.
+VALVE_RETRIES: Final = 2
+
+# Respiro fra un tentativo e l'altro. Riprovare nell'istante stesso in
+# cui è scaduta l'attesa ricadrebbe nella stessa condizione che ha fatto
+# fallire il primo comando.
+VALVE_RETRY_PAUSE_S: Final = 5
+
 # Eventi sul bus di Home Assistant, richiamabili anche da fuori
 # dall'integration (automazioni, script, altre integrazioni).
 EVENT_STARTED: Final = f"{DOMAIN}_started"

@@ -347,6 +347,28 @@ Conseguenze sul resto del sistema:
   rimaste: se non ha risposto adesso non risponderà fra dieci minuti, e
   il suo deficit resta a bilancio per il giorno dopo
 
+### 6.1-ter Tentativi di apertura
+
+Il principio resta quello di sempre: non si dà mai per scontato che una
+linea stia irrigando solo perché è stato dato il comando. Ma **un
+silenzio solo non prova che la valvola sia guasta** — una radio o una
+batteria possono perdere un comando e rispondere al successivo, e
+rinunciare al primo tentativo salta un'irrigazione per un pacchetto
+perso.
+
+Si riprova quindi `valve_retries` volte (2 di default, configurabile),
+con `VALVE_RETRY_PAUSE_S` fra un tentativo e l'altro: riprovare
+nell'istante in cui è scaduta l'attesa ricadrebbe nella stessa
+condizione che ha fatto fallire il primo comando. Prima di ogni nuovo
+tentativo si richiude, così si riparte da una condizione nota invece che
+da un comando appeso.
+
+Ogni tentativo andato a vuoto finisce nel registro come avviso, e il
+recupero pure ("valvola aperta al tentativo 2 di 3"): una valvola che
+funziona solo al secondo colpo sta dicendo qualcosa, e va vista prima
+che smetta del tutto. Esaurito l'ultimo tentativo la linea viene saltata
+per questa irrigazione, e le passate rimaste non si riprovano.
+
 ### 6.2 La finestra è un vincolo di capienza
 
 Questo è il vero motivo per cui la finestra va gestita bene. Con

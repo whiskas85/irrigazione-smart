@@ -47,6 +47,8 @@ DEFAULT_SYSTEM: dict[str, Any] = {
     # Flussostato: informativo, non blocca mai l'irrigazione
     "flow_entity": None,
     "valve_timeout_s": 30,
+    # tentativi in più dopo il primo, prima di saltare la linea
+    "valve_retries": 2,
     # Master di notifiche e azioni: spenti, non parte nulla anche se le
     # singole voci sono abilitate.
     "notifications_enabled": True,

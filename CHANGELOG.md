@@ -8,6 +8,25 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Modificato
+- **La valvola che non risponde viene ritentata, non abbandonata.** Il
+  controllo di apertura c'era già, ma al primo silenzio la linea veniva
+  saltata: un silenzio solo però non prova che la valvola sia guasta —
+  una radio o una batteria possono perdere un comando e rispondere al
+  successivo, e così bastava un pacchetto perso per saltare
+  un'irrigazione. Ora si riprova **due volte** (configurabile, 0 = come
+  prima), con cinque secondi di respiro: riprovare nell'istante in cui è
+  scaduta l'attesa ricadrebbe nella stessa condizione che ha fatto
+  fallire il primo comando
+  - Prima di ogni nuovo tentativo la valvola viene richiusa, così si
+    riparte da una condizione nota invece che da un comando appeso
+  - Ogni tentativo a vuoto finisce nel registro come avviso, e anche il
+    recupero: «valvola aperta al tentativo 2 di 3». Una valvola che
+    funziona solo al secondo colpo sta dicendo qualcosa, e va vista prima
+    che smetta del tutto
+  - Esauriti i tentativi, la linea viene saltata per questa irrigazione
+    esattamente come prima, col deficit che resta a bilancio
+
 ## [1.5.0] - 2026-07-29
 
 ### Aggiunto

@@ -4287,7 +4287,14 @@ class IrrigazioneSmartPanel extends HTMLElement {
       {
         key: "valve_timeout_s", label: "Attesa conferma valvola",
         type: "number", suffix: "s", min: 5,
-        helper: "Oltre questo tempo senza conferma, la linea viene saltata",
+        helper: "Quanto si aspetta che la valvola dica di essersi aperta",
+      },
+      {
+        key: "valve_retries", label: "Tentativi in più", type: "number", min: 0, max: 5,
+        helper:
+          "Se la valvola non conferma, quante volte riprovare prima di " +
+          "saltare la linea. Una radio o una batteria possono perdere un " +
+          "comando senza essere guaste. 0 = si rinuncia al primo silenzio",
       },
     ];
 
@@ -4300,6 +4307,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
       overflow_policy: sys.overflow_policy,
       flow_entity: sys.flow_entity || undefined,
       valve_timeout_s: sys.valve_timeout_s,
+      valve_retries: sys.valve_retries ?? 2,
     };
 
     this._showForm("Impostazioni sistema", specs, initial, async (values) => {
