@@ -8,6 +8,15 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Corretto
+- **«7.5 min · 4 cicli» si leggeva come "7.5 minuti quattro volte".** Era
+  il contrario: 7.5 minuti *in tutto*, spezzati in quattro passate da 1.9.
+  Chi leggeva si aspettava mezz'ora d'acqua e ne riceveva un quarto — e
+  non c'era modo di accorgersene dal badge. Ora dice «7.5 min in totale,
+  4 passate», e la riga sotto scrive per esteso «4 passate da 1.9 min, 30
+  min di assorbimento fra una e l'altra (riempiti irrigando le altre
+  linee)» invece di un moltiplicatore che si poteva leggere al contrario
+
 ## [1.2.1] - 2026-07-29
 
 ### Corretto

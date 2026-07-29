@@ -1948,7 +1948,13 @@ class IrrigazioneSmartPanel extends HTMLElement {
 
     let status;
     if (plan.should_run) {
-      status = `<span class="badge run">${plan.total_minutes} min · ${plan.cycles} ${plan.cycles > 1 ? "cicli" : "ciclo"}</span>`;
+      // "7.5 min · 4 cicli" si legge come "7.5 minuti quattro volte", ed
+      // era il contrario: sono 7.5 in tutto, spezzati in quattro. Il
+      // totale è l'acqua che arriva, la divisione è un dettaglio di come
+      // ci arriva — si scrive per esteso perché nessuno lo indovini.
+      status = `<span class="badge run">${plan.total_minutes} min in totale${
+        plan.cycles > 1 ? `, ${plan.cycles} passate` : ""
+      }</span>`;
     } else if (isBlocked(plan.reason)) {
       status = `<span class="badge warn">${esc(reasonLabel(plan.reason))}</span>`;
     } else {
@@ -2004,7 +2010,13 @@ class IrrigazioneSmartPanel extends HTMLElement {
         plan.should_run
           ? `<div class="zone-plan">
                <ha-icon icon="mdi:water"></ha-icon>
-               <span>${plan.minutes_per_cycle} min × ${plan.cycles}${plan.soak_minutes ? ` con pause di ${plan.soak_minutes} min` : ""} · ${plan.gross_mm} mm lordi</span>
+               <span>${
+                 plan.cycles > 1
+                   ? `${plan.cycles} passate da ${plan.minutes_per_cycle} min, ` +
+                     `${plan.soak_minutes} min di assorbimento fra una e l'altra ` +
+                     `(riempiti irrigando le altre linee)`
+                   : `una passata di ${plan.minutes_per_cycle} min`
+               } · ${plan.gross_mm} mm lordi</span>
                ${plan.capped ? `<span class="badge warn">troncato dal tetto</span>` : ""}
              </div>`
           : ""
