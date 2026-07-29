@@ -7,6 +7,12 @@ se l'acqua è davvero uscita e, se no, perché.
 
 Vive in un file di storage separato da quello delle zone: si scrive spesso,
 e non deve rimescolare lo stato del bilancio idrico a ogni riga.
+
+Il modulo si chiamava `logbook.py`, ed era il nome sbagliato: Home
+Assistant importa `<integration>/logbook.py` come *piattaforma* del suo
+registro e vi cerca `async_describe_events`. Non trovandola sollevava un
+AttributeError a ogni avvio. Questo registro è una cosa nostra, non una
+piattaforma di Home Assistant: gli si dà un nome che non sia riservato.
 """
 
 from __future__ import annotations

@@ -19,10 +19,10 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
+from .activity_log import get_log
 from .const import CATEGORY_LABELS, CATEGORY_ORDER, DOMAIN
 from .executor import get_executor
 from .hydro import TimeWindow
-from .logbook import get_log
 from .store import WEEKDAYS, IrrigazioneStore
 
 _LOGGER = logging.getLogger(__name__)

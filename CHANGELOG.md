@@ -8,6 +8,36 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Corretto
+- **Il bilancio idrico si aggiornava solo ai riavvii di Home Assistant.**
+  Il ciclo che legge il meteo e fa crescere il deficit doveva girare ogni
+  dieci minuti. Non girava: il timer del `DataUpdateCoordinator` viene
+  armato solo finché qualche entità è in ascolto del coordinator, e qui
+  nessuna lo è — i sensori leggono lo store e si aggiornano su un
+  segnale. Dopo il primo aggiornamento all'avvio non ne partiva più
+  nessuno, e il deficit restava fermo finché non si riavviava
+  - Il danno vero è che quell'unico giro capita **durante l'avvio**,
+    quando l'entità meteo spesso non esiste ancora: la lettura torna a
+    vuoto, la giornata resta senza Tmin e Tmax, e senza escursione
+    termica l'ET0 è **zero fino a mezzanotte**. Il 29 luglio, con 22,7 e
+    34,2 gradi misurati e nessuna pioggia, il sistema ha segnato ET0 0,00
+    mm invece di 5,41: il prato ha perso 4,4 mm che non sono mai finiti a
+    bilancio. Anche il giorno prima era sottostimato del 26% (4,18 mm
+    contro 5,63), perché gli estremi venivano campionati solo nei pochi
+    istanti in cui il ciclo girava per caso
+  - Adesso la cadenza è un timer esplicito dell'integration, e il primo
+    giro aspetta che Home Assistant sia avviato del tutto, così le entità
+    meteo ci sono già
+- **Un errore a ogni avvio nel registro di Home Assistant.** Il nostro
+  registro delle attività stava in `logbook.py`, e quel nome è riservato:
+  Home Assistant importa `<integration>/logbook.py` come piattaforma del
+  proprio registro e vi cerca `async_describe_events`, sollevando un
+  AttributeError quando non la trova. Il modulo ora si chiama
+  `activity_log.py`
+- Rimessi in riga cinque rilievi del linter che facevano fallire la CI
+  (fra questi una variabile di ciclo catturata in una closure, innocua
+  solo perché la funzione veniva chiamata subito)
+
 ## [1.8.0] - 2026-07-29
 
 ### Aggiunto

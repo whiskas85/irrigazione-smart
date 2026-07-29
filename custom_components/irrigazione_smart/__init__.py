@@ -8,10 +8,10 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.start import async_at_started
 
+from .activity_log import IrrigazioneLog, async_subscribe_events
 from .const import DOMAIN, PLATFORMS
 from .coordinator import IrrigazioneCoordinator
 from .executor import IrrigationExecutor
-from .logbook import IrrigazioneLog, async_subscribe_events
 from .notifier import Notifier
 from .panel import async_remove_panel, async_setup_panel, async_setup_store
 from .recovery import async_recover_interrupted_run
@@ -30,6 +30,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = IrrigazioneCoordinator(hass, entry, store)
     await coordinator.async_config_entry_first_refresh()
     hass.data[DOMAIN]["coordinator"] = coordinator
+    # Il ciclo va acceso a mano: senza, il primo aggiornamento qui sopra
+    # resterebbe l'unico di tutta la giornata (vedi `async_start`).
+    entry.async_on_unload(coordinator.async_start())
     hass.data[DOMAIN]["executor"] = IrrigationExecutor(hass, store)
 
     activity_log = IrrigazioneLog(hass)

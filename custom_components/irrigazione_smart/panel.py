@@ -26,6 +26,7 @@ from homeassistant.helpers.storage import STORAGE_DIR
 from homeassistant.loader import async_get_integration
 from homeassistant.util import dt as dt_util
 
+from .activity_log import get_log
 from .const import (
     CATEGORY_ICONS,
     CATEGORY_LABELS,
@@ -54,7 +55,6 @@ from .hydro import (
     schedule_sequence,
     window_quality,
 )
-from .logbook import get_log
 from .notifier import HOOK_LABELS, build_context, get_notifier
 from .scheduler import get_scheduler
 from .store import WEEKDAYS, IrrigazioneStore, ulid_now
@@ -339,7 +339,7 @@ def _flow_payload(hass: HomeAssistant, system: dict[str, Any]) -> dict[str, Any]
 
 def _hhmm(minute: float) -> str:
     """Minuti dalla mezzanotte in 'HH:MM', anche oltre le 24."""
-    m = int(round(minute)) % (24 * 60)
+    m = round(minute) % (24 * 60)
     return f"{m // 60:02d}:{m % 60:02d}"
 
 

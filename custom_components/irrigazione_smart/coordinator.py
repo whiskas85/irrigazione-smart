@@ -18,8 +18,10 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_LATITUDE
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.start import async_at_started
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
@@ -87,10 +89,48 @@ class IrrigazioneCoordinator(DataUpdateCoordinator):
             hass,
             _LOGGER,
             name="Irrigazione Smart",
-            update_interval=timedelta(minutes=UPDATE_INTERVAL_MIN),
+            # La cadenza la tiene `async_start`, non il coordinator: vedi lì
+            # il perché. Lasciarla anche qui farebbe due giri per volta il
+            # giorno in cui qualcuno aggiungesse un'entità in ascolto.
+            update_interval=None,
         )
         self._entry = entry
         self._store = store
+
+    @callback
+    def async_start(self) -> CALLBACK_TYPE:
+        """Avvia il ciclo periodico. Ritorna la funzione per fermarlo.
+
+        Il timer è nostro e non quello del `DataUpdateCoordinator`: quello
+        viene armato solo finché almeno un'entità è in ascolto del
+        coordinator, e qui nessuna lo è — i sensori leggono lo store e si
+        aggiornano su un segnale. Il risultato era che dopo il primo
+        aggiornamento all'avvio non ne partiva più nessuno: il bilancio
+        idrico avanzava soltanto quando si riavviava Home Assistant, e una
+        giornata a 34 gradi passava con ET0 zero.
+
+        Il primo giro aspetta che Home Assistant sia avviato del tutto.
+        Durante il caricamento l'entità meteo può non esistere ancora: la
+        lettura tornerebbe a vuoto e la giornata resterebbe senza Tmin e
+        Tmax, cioè senza ET0, fino a mezzanotte.
+        """
+        unsub_periodico = async_track_time_interval(
+            self.hass,
+            self._async_tick,
+            timedelta(minutes=UPDATE_INTERVAL_MIN),
+        )
+        unsub_avvio = async_at_started(self.hass, self._async_tick)
+
+        @callback
+        def _stop() -> None:
+            unsub_periodico()
+            unsub_avvio()
+
+        return _stop
+
+    async def _async_tick(self, _quando: Any = None) -> None:
+        """Un giro del ciclo. Gli errori li assorbe il coordinator."""
+        await self.async_refresh()
 
     # ------------------------------------------------------------ letture
 

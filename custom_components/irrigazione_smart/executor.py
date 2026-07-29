@@ -16,6 +16,7 @@ import contextlib
 import logging
 from dataclasses import dataclass
 from datetime import timedelta
+from itertools import pairwise
 from typing import Any
 
 from homeassistant.core import HomeAssistant, callback
@@ -23,14 +24,15 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util import dt as dt_util
 
+from .activity_log import ERROR, WARNING, get_log
 from .const import (
     DOMAIN,
     EVENT_FINISHED,
     EVENT_STARTED,
+    EVENT_VALVE_STUCK,
     EVENT_ZONE_FAILED,
     EVENT_ZONE_FINISHED,
     EVENT_ZONE_STARTED,
-    EVENT_VALVE_STUCK,
     SIGNAL_STATE_CHANGED,
     VALVE_CLOSE_ATTEMPTS,
     VALVE_CONFIRM_TIMEOUT,
@@ -45,7 +47,6 @@ from .hydro import (
     interleave_cycles,
     resolve_zone_params,
 )
-from .logbook import ERROR, WARNING, get_log
 from .store import IrrigazioneStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -415,7 +416,11 @@ class IrrigationExecutor:
 
         self._hass.bus.async_fire(
             EVENT_VALVE_STUCK,
-            {"valvola": entity_id, "nome": zone_name, "tentativi": VALVE_CLOSE_ATTEMPTS},
+            {
+                "valvola": entity_id,
+                "nome": zone_name,
+                "tentativi": VALVE_CLOSE_ATTEMPTS,
+            },
         )
 
     async def _irrigate_for(self, valve: str, minutes: float) -> str:
@@ -546,7 +551,7 @@ class IrrigationExecutor:
         for run, cycle in steps:
             if cycle >= run.cycles:
                 finishing.append(run)
-        for current, following in zip(finishing, finishing[1:]):
+        for current, following in pairwise(finishing):
             current.next_zone_id = following.zone_id
             current.next_name = following.name
 

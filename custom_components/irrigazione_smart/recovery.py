@@ -24,12 +24,11 @@ alla fine della linea.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN, EVENT_RECOVERED, CATEGORY_ORDER, zone_category
-from .logbook import ERROR, WARNING, get_log
+from .activity_log import ERROR, WARNING, get_log
+from .const import CATEGORY_ORDER, DOMAIN, EVENT_RECOVERED, zone_category
 from .store import IrrigazioneStore
 
 _LOGGER = logging.getLogger(__name__)

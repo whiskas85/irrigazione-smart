@@ -845,12 +845,15 @@ def interleave_cycles(
         # prima della primissima passata
         earliest = cursor if first else cursor + gap_minutes
 
-        def when(zid: str) -> float:
-            return max(earliest, ready_at[zid])
+        def when(zid: str, non_prima_di: float = 0.0) -> float:
+            return max(non_prima_di, ready_at[zid])
 
-        chosen = min(candidates, key=lambda zid: (when(zid), done[zid], order[zid]))
+        chosen = min(
+            candidates,
+            key=lambda zid: (when(zid, earliest), done[zid], order[zid]),
+        )
         name, plan = by_id[chosen]
-        begin = when(chosen)
+        begin = when(chosen, earliest)
         length = plan.minutes_per_cycle or plan.total_minutes
         finish = begin + length
 

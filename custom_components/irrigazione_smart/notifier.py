@@ -21,6 +21,7 @@ from typing import Any
 
 from homeassistant.core import Event, HomeAssistant, callback
 
+from .activity_log import ERROR, get_log
 from .const import (
     DOMAIN,
     EVENT_FINISHED,
@@ -29,7 +30,6 @@ from .const import (
     EVENT_ZONE_FINISHED,
     EVENT_ZONE_STARTED,
 )
-from .logbook import ERROR, get_log
 from .store import IrrigazioneStore
 
 _LOGGER = logging.getLogger(__name__)
