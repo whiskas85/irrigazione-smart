@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-07-30
+
 ### Corretto
 - **Le entità erano ferme all'avvio mentre il pannello diceva un altro
   numero.** Deficit 3,2 in pagina e 0 sull'entità, e nessuno dei due
