@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from homeassistant.core import callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import Entity
@@ -69,7 +70,18 @@ class IrrigazioneEntity(Entity):
             )
         )
 
+    @callback
     def _handle_state_changed(self) -> None:
+        """Riscrive lo stato dell'entità.
+
+        Il decoratore non è un dettaglio: senza, Home Assistant considera
+        questa funzione lavoro sincrono e la esegue in un thread del pool.
+        `async_write_ha_state` da lì solleva un RuntimeError, che il
+        dispatcher inghiotte come errore isolato — e l'entità resta ferma
+        all'ultimo valore scritto all'avvio, mentre il pannello, che legge
+        lo store via HTTP, mostra il numero aggiornato. Da fuori sembrava
+        che i due si contraddicessero.
+        """
         if self.hass is not None:
             self.async_write_ha_state()
 

@@ -1,6 +1,10 @@
 {
   "domain": "irrigazione_smart",
   "name": "Irrigazione Smart",
+  "after_dependencies": [
+    "recorder",
+    "weather"
+  ],
   "codeowners": [
     "@whiskas85"
   ],

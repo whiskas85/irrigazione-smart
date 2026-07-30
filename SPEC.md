@@ -146,9 +146,19 @@ aggiunte a caldo, senza riavvio.
 | `number` | `number.irrigazione_<slug>_portata` | mm/h dal tuna can test |
 | `select` | `select.irrigazione_<slug>_tipo` | preset |
 | `select` | `select.irrigazione_<slug>_terreno` | `↑ Eredita` + tessiture |
-| `sensor` | `sensor.irrigazione_<slug>_deficit` | mm, `state_class: measurement` |
-| `sensor` | `sensor.irrigazione_<slug>_durata` | minuti previsti oggi |
-| `binary_sensor` | `binary_sensor.irrigazione_<slug>_irriga_oggi` | + attributi `reason`, `soglia`, `cicli` |
+| `sensor` | `sensor.<linea>_deficit_idrico` | mm, + attributi `soglia_mm`, `taw_mm`, `terreno`, `kc` |
+| `sensor` | `sensor.<linea>_durata_prevista` | minuti previsti oggi, + `motivo`, `cicli`, `troncato` |
+| `sensor` | `sensor.<linea>_stato` | enum: `ok`, `chiede_acqua`, `carenza_forte`, `in_irrigazione`, `disattivata` |
+| `sensor` | `sensor.<linea>_ultima_irrigazione` | timestamp, + `durata_min`, `tipo` |
+| `binary_sensor` | `binary_sensor.<linea>_in_irrigazione` | `device_class: running`, + minuti e passate |
+| `button` | `button.<linea>_irriga_ora` | forzatura della singola linea |
+
+A livello d'impianto: `sensor.irrigazione_smart_et0_giornaliera`,
+`sensor.irrigazione_smart_prossima_irrigazione` (timestamp, con il
+dettaglio per gruppo negli attributi),
+`binary_sensor.irrigazione_smart_irrigazione_in_corso`,
+`button.irrigazione_smart_avvia_irrigazione` e
+`button.irrigazione_smart_ferma_irrigazione`.
 
 **Pattern di implementazione**: ogni platform espone un
 `async_setup_entry` che registra un listener sul coordinator; alla

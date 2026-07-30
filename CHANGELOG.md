@@ -8,6 +8,45 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Corretto
+- **Le entità erano ferme all'avvio mentre il pannello diceva un altro
+  numero.** Deficit 3,2 in pagina e 0 sull'entità, e nessuno dei due
+  sbagliava a leggere: il pannello interroga lo store via HTTP, l'entità
+  aspetta un segnale interno. Quel segnale arrivava, ma la funzione che
+  lo riceve non era dichiarata come callback, e Home Assistant la
+  eseguiva in un thread del pool: `async_write_ha_state` da lì solleva un
+  RuntimeError, che il dispatcher inghiotte come errore isolato. Ogni
+  entità restava così all'ultimo valore scritto all'avvio
+
+### Aggiunto
+- **La giornata si ricostruisce dallo storico, non solo campionando.**
+  Gli accumulatori vivevano in memoria: se l'integration partiva a
+  mezzogiorno, la minima della notte era persa — e senza escursione
+  termica l'ET0 esce vicina a zero per tutto il resto del giorno. Ma quei
+  numeri Home Assistant li ha già nel recorder. Adesso a ogni giro la
+  giornata in corso viene riletta da lì: temperature, umidità, vento,
+  irraggiamento e pioggia tornano quelli veri, e un riavvio non toglie
+  più niente al bilancio
+  - Vale anche alla chiusura di mezzanotte: prima di archiviare il giorno
+    lo si rilegge per intero, così una giornata passata in parte con
+    l'integration ferma viene comunque chiusa sui dati misurati invece
+    che scartata per mancanza di temperature
+  - Funziona sia con un sensore locale sia con l'entità meteo, da cui si
+    legge l'attributo storicizzato. Senza recorder si resta al
+    comportamento di prima, senza errori
+- **Entità nuove per il controllo da fuori.** Per ogni linea:
+  `sensor.<linea>_stato` (`ok`, `chiede_acqua`, `carenza_forte`,
+  `in_irrigazione`, `disattivata`), `sensor.<linea>_ultima_irrigazione`
+  (timestamp, con durata e tipo), `binary_sensor.<linea>_in_irrigazione`
+  (acceso solo mentre l'acqua esce davvero, non durante le pause di
+  assorbimento) e `button.<linea>_irriga_ora`
+  - Per l'impianto: `sensor.irrigazione_smart_prossima_irrigazione`
+    (timestamp, col dettaglio per gruppo negli attributi),
+    `binary_sensor.irrigazione_smart_irrigazione_in_corso` e i pulsanti
+    *Avvia* e *Ferma*
+  - Servono a scrivere automazioni senza rifare i conti in un template:
+    la soglia, la TAW e il semaforo li calcola già il motore
+
 ## [1.8.2] - 2026-07-30
 
 ### Corretto

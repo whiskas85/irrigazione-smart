@@ -54,8 +54,11 @@ terreno, non quando lo dice il calendario.
   a bilancio invece di sparire
 - **Pagina dedicata** — nella barra laterale, divisa in Dashboard, Zone e
   Meteo, con master generale e master per ogni linea
-- **Entità esposte** — interruttori master e di linea, ET0, deficit e
-  durata prevista per zona: usabili in automazioni, scene e dashboard
+- **Entità esposte** — per ogni linea: interruttore, deficit, durata
+  prevista, stato, ultima irrigazione, «in irrigazione» e un pulsante
+  *Irriga ora*. Per l'impianto: ET0, prossima irrigazione, irrigazione in
+  corso, avvia e ferma. Tutto usabile in automazioni, scene e dashboard
+  senza passare dal pannello
 - **Conferma di apertura valvola** — nessuna linea è data per irrigata solo
   perché è stato dato il comando: senza conferma di stato la linea viene
   saltata e il deficit resta a bilancio

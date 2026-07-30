@@ -26,7 +26,12 @@ STORAGE_SAVE_DELAY: Final = 10  # secondi di debounce: protegge la SD del Pi
 # giornata, non a reagire in tempo reale: 10 minuti bastano e non pesano.
 UPDATE_INTERVAL_MIN: Final = 10
 
-PLATFORMS: Final[list[Platform]] = [Platform.SWITCH, Platform.SENSOR]
+PLATFORMS: Final[list[Platform]] = [
+    Platform.SWITCH,
+    Platform.SENSOR,
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+]
 
 # Prato e aiuole hanno irrigatori diversi — statici e turbine contro ala
 # gocciolante — e quindi portate, durate e abitudini diverse. Vanno tenuti

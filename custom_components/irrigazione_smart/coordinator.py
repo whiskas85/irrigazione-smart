@@ -14,8 +14,11 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
+from functools import partial
 from typing import Any
 
+from homeassistant.components.recorder import get_instance as get_recorder
+from homeassistant.components.recorder import history
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_LATITUDE
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
@@ -261,6 +264,131 @@ class IrrigazioneCoordinator(DataUpdateCoordinator):
 
         return out
 
+    # ------------------------------------------------ ricostruzione storica
+
+    def _source_of(self, key: str, attr: str) -> tuple[str | None, str | None]:
+        """Da dove arriva una grandezza: (entità, attributo).
+
+        Stessa precedenza delle letture in tempo reale — sensore locale se
+        c'è, altrimenti l'entità meteo — ma restituita in forma leggibile
+        anche dallo storico. Sul meteo il numero sta in un attributo, non
+        nello stato: `weather.casa` vale «sereno», non 28,4.
+        """
+        entity_id = self._entry.data.get(key)
+        if entity_id and self.hass.states.get(entity_id) is not None:
+            return entity_id, None
+        weather = self._entry.data.get(CONF_WEATHER_ENTITY)
+        return (weather, attr) if weather else (None, None)
+
+    async def _history_values(
+        self, entity_id: str | None, attr: str | None, start: Any, end: Any
+    ) -> list[float]:
+        """Valori numerici registrati fra due istanti."""
+        if not entity_id:
+            return []
+        try:
+            recorder = get_recorder(self.hass)
+        except (KeyError, RuntimeError):
+            # senza recorder si resta ai campionamenti dal vivo
+            return []
+
+        try:
+            rows = await recorder.async_add_executor_job(
+                partial(
+                    history.state_changes_during_period,
+                    self.hass,
+                    start,
+                    end,
+                    entity_id,
+                    no_attributes=attr is None,
+                    include_start_time_state=True,
+                )
+            )
+        except Exception:
+            # lo storico è un di più: se non si legge, si resta ai
+            # campionamenti dal vivo invece di fermare il ciclo
+            _LOGGER.debug("Storico non leggibile per %s", entity_id, exc_info=True)
+            return []
+
+        valori: list[float] = []
+        for state in rows.get(entity_id) or []:
+            grezzo = state.attributes.get(attr) if attr else state.state
+            numero = _as_float(grezzo)
+            if numero is not None:
+                valori.append(numero)
+        return valori
+
+    async def _sync_from_history(self, daily: dict[str, Any]) -> None:
+        """Ricostruisce la giornata in corso dallo storico di Home Assistant.
+
+        Gli accumulatori vivono in memoria: se l'integration parte a
+        mezzogiorno — un riavvio, un aggiornamento da HACS — la mattina è
+        persa, e con lei la temperatura minima. Senza minima non c'è
+        escursione termica, e senza escursione l'ET0 esce vicina a zero
+        per tutto il resto della giornata.
+
+        Ma quei numeri Home Assistant li ha già registrati. Invece di
+        ricostruire una minima campionando da adesso in poi, si legge la
+        giornata com'è andata davvero. Le medie sostituiscono gli
+        accumulatori invece di sommarsi: lo storico contiene già i
+        campioni che il ciclo aveva raccolto.
+        """
+        giorno = dt_util.parse_date(daily.get("date") or "")
+        inizio = dt_util.start_of_local_day(giorno or dt_util.now())
+        fine = min(dt_util.now(), inizio + timedelta(days=1))
+
+        eid, attr = self._source_of(CONF_TEMPERATURE_ENTITY, "temperature")
+        temperature = await self._history_values(eid, attr, inizio, fine)
+        if temperature:
+            unita = self._unit_of(eid, attr)
+            temperature = [_to_celsius(v, unita) for v in temperature]
+            minima, massima = min(temperature), max(temperature)
+            t_min, t_max = daily.get("t_min"), daily.get("t_max")
+            daily["t_min"] = minima if t_min is None else min(t_min, minima)
+            daily["t_max"] = massima if t_max is None else max(t_max, massima)
+
+        eid, attr = self._source_of(CONF_HUMIDITY_ENTITY, "humidity")
+        umidita = await self._history_values(eid, attr, inizio, fine)
+        if umidita:
+            daily["rh_sum"], daily["rh_n"] = sum(umidita), len(umidita)
+
+        # il vento va in m/s: l'unità è quella dichiarata dalla sorgente
+        eid, attr = self._source_of(CONF_WIND_ENTITY, "wind_speed")
+        vento = await self._history_values(eid, attr, inizio, fine)
+        if vento:
+            unita = self._unit_of(eid, attr)
+            daily["wind_sum"] = sum(_to_ms(v, unita) for v in vento)
+            daily["wind_n"] = len(vento)
+
+        # Piranometro e pluviometro solo se sono sensori veri: il servizio
+        # meteo non espone né l'irraggiamento istantaneo né la pioggia
+        # cumulata della giornata, e leggerne lo stato darebbe «sereno».
+        irraggiamento = await self._history_values(
+            self._entry.data.get(CONF_IRRADIANCE_ENTITY), None, inizio, fine
+        )
+        if irraggiamento:
+            daily["irr_sum"], daily["irr_n"] = sum(irraggiamento), len(irraggiamento)
+
+        pioggia = await self._history_values(
+            self._entry.data.get(CONF_RAIN_ENTITY), None, inizio, fine
+        )
+        if pioggia:
+            # il pluviometro cumula sulla giornata: conta il massimo visto
+            daily["rain_mm"] = max(float(daily.get("rain_mm") or 0.0), max(pioggia))
+
+    def _unit_of(self, entity_id: str | None, attr: str | None) -> str | None:
+        """Unità dichiarata da una sorgente, per convertire lo storico."""
+        state = self._state(entity_id)
+        if state is None:
+            return None
+        # l'entità meteo dichiara l'unità di ogni grandezza a parte, il
+        # sensore ne ha una sola e vale per il suo stato
+        if attr == "wind_speed":
+            return state.attributes.get("wind_speed_unit")
+        if attr == "temperature":
+            return state.attributes.get("temperature_unit")
+        return state.attributes.get("unit_of_measurement")
+
     # ---------------------------------------------------- ciclo giornaliero
 
     def _accumulate(self, daily: dict[str, Any], live: dict[str, Any]) -> None:
@@ -472,7 +600,12 @@ class IrrigazioneCoordinator(DataUpdateCoordinator):
         if daily.get("date") is None:
             daily["date"] = today
         elif daily["date"] != today:
-            # è passata la mezzanotte: si chiude il giorno accumulato
+            # è passata la mezzanotte: si chiude il giorno accumulato.
+            # Prima però lo si rilegge dallo storico: se l'integration è
+            # rimasta ferma per una parte di quel giorno, i suoi
+            # accumulatori raccontano solo i pezzi in cui era accesa —
+            # e senza temperature la chiusura non calcola nulla.
+            await self._sync_from_history(daily)
             summary = self._close_day(daily)
             carried = {
                 "last_et0_mm": (summary or daily).get("last_et0_mm"),
@@ -481,6 +614,10 @@ class IrrigazioneCoordinator(DataUpdateCoordinator):
             }
             daily = {**DEFAULT_DAILY, **carried, "date": today}
 
+        # La giornata in corso si riallinea allo storico a ogni giro: costa
+        # una lettura al recorder e rende il bilancio indifferente ai
+        # riavvii, che è esattamente il punto in cui si rompeva.
+        await self._sync_from_history(daily)
         self._accumulate(daily, live)
 
         # La previsione serve prima del bilancio, non dopo: a metà mattina
