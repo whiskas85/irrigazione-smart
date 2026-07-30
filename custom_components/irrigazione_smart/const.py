@@ -78,6 +78,20 @@ VALVE_CONFIRM_TIMEOUT: Final = 30
 # pacchetto perso.
 VALVE_RETRIES: Final = 2
 
+# ------------------------------------------------------------------ taratura
+#
+# Quanto dura la prova di una linea. Non serve irrigare: serve leggere una
+# portata a regime, e per quello bastano due minuti — di cui i primi
+# trenta secondi buttati, perché l'impianto deve riempire i tubi e mandare
+# in pressione gli irrigatori, e gli ultimi cinque pure, perché la valvola
+# non si chiude nell'istante in cui glielo si dice.
+CALIBRATION_RUN_S: Final = 120
+CALIBRATION_WARMUP_S: Final = 30
+CALIBRATION_TAIL_S: Final = 5
+# Pausa fra una linea e la successiva: lascia scaricare la pressione, così
+# la linea dopo parte dalle stesse condizioni della prima.
+CALIBRATION_GAP_S: Final = 60
+
 # Respiro fra un tentativo e l'altro. Riprovare nell'istante stesso in
 # cui è scaduta l'attesa ricadrebbe nella stessa condizione che ha fatto
 # fallire il primo comando.

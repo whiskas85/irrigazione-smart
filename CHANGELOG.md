@@ -8,6 +8,49 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Aggiunto
+- **Taratura della portata col flussostato.** Un litro steso su un metro
+  quadro è alto un millimetro: se un contatore dice quanti litri passano,
+  la portata vera della linea si misura invece di stimarla. La prova apre
+  ogni linea per **due minuti** e conta l'acqua — scartando i primi
+  trenta secondi, perché l'impianto deve andare in pressione, e gli
+  ultimi cinque, perché la valvola non chiude nell'istante in cui glielo
+  si dice. Fra una linea e l'altra passa un minuto, così la successiva
+  parte dalle stesse condizioni
+  - La pagina racconta cosa sta succedendo: fase per fase — *sto aprendo
+    la valvola*, *aspetto che l'impianto vada a regime*, *sto contando i
+    litri* — col conto alla rovescia, i litri che salgono e l'avanzamento
+    sull'intera prova
+  - Funziona sia con un totalizzatore (differenza fra due letture) sia
+    con una portata istantanea (integrata secondo per secondo), in L/min,
+    L/h o m³/h
+  - Occupa lo stesso posto di un'irrigazione: non parte mentre si irriga,
+    e *Ferma tutto* la ferma. Le valvole si aprono e si chiudono con le
+    stesse verifiche, perché qui l'acqua esce davvero — e infatti i due
+    minuti finiscono a bilancio come un'irrigazione breve, invece di
+    sparire
+- **La superficie si calcola dagli irrigatori, non si misura.** Gli
+  irrigatori si posano testa a testa: il getto di ognuno arriva sulla
+  testina vicina, quindi l'area servita da una testina è l'interasse al
+  quadrato. Si dichiarano **quanti irrigatori** ha la linea e **a che
+  distanza** stanno — due dati che si prendono con una fettuccia — e i
+  mm/h escono da soli. Chi ha le file sfalsate sceglie la posa a
+  triangolo, che serve il 13% in meno
+  - I litri misurati restano salvati: se la geometria la si inserisce
+    dopo, i mm/h compaiono senza rifare la prova
+
+### Modificato
+- **La portata della zona è tornata un numero solo.** C'erano unità di
+  misura, portata in litri, portata in millimetri e superficie: quattro
+  campi da tenere coerenti fra loro, e se la combinazione era sbagliata i
+  litri venivano ignorati in silenzio. Adesso il campo è uno — i mm/h —
+  con accanto scritto da dove viene: *«misurata il 30/07, 902 L/h su
+  121,5 m²»* oppure *«da tarare»*. Le zone che usavano i litri vengono
+  convertite al primo avvio
+- **Il correttore è un cursore da 0 a 2.** Non è una misura da digitare,
+  è una manopola che si sposta guardando il prato: adesso si trascina, e
+  il numero si legge accanto. A 0 la linea non irriga
+
 ## [1.9.0] - 2026-07-30
 
 ### Corretto

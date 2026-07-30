@@ -125,12 +125,21 @@ ZONE_FIELDS: dict[str, Any] = {
     "max_runtime_min": -1,
     # sempre espliciti: descrivono l'impianto
     "rate_mm_h": 10.0,
-    # Come è stata misurata la portata. Il motore lavora in mm/h, ma i
-    # cataloghi danno litri: si conserva anche il dato originale, così
-    # l'utente rilegge quello che ha inserito e non una conversione.
-    "rate_mode": "mm_h",
-    "flow_value": None,
+    # Geometria della linea: quanti irrigatori e a che distanza fra loro.
+    # Sono le due cose che si misurano davvero in giardino — una fettuccia
+    # fra due testine — e da lì esce la superficie bagnata, che nessuno ha
+    # voglia di misurare a mano su un prato a elle.
+    "sprinklers": None,
+    "spacing_m": None,
+    # "quadrata" o "triangolare": cambia l'area servita del 13%
+    "layout": "quadrata",
     "area_m2": None,
+    # Contatore o flussostato che vede questa linea. Vuoto = quello di
+    # sistema: la maggior parte degli impianti ne ha uno solo, a monte.
+    "flow_entity": None,
+    # Da dove viene il numero in mm/h: metodo, data e misure grezze. Serve
+    # a sapere di chi fidarsi fra sei mesi.
+    "rate_source": None,
     "emitter": "statici",
     "corrector": 1.0,
     "excluded_days": [],
@@ -251,31 +260,79 @@ def clean_points(raw: Any) -> list[list[float]]:
     return points
 
 
-def resolve_rate_mm_h(zone: dict[str, Any]) -> float:
-    """Portata in mm/h, comunque l'utente l'abbia inserita.
+# Posa degli irrigatori: quanta superficie serve una testina, in rapporto
+# al quadrato dell'interasse. Con la posa a triangolo le testine sono
+# sfalsate e ognuna copre meno.
+LAYOUT_FACTOR: dict[str, float] = {"quadrata": 1.0, "triangolare": 0.866}
 
-    Un litro d'acqua steso su un metro quadro è alto un millimetro: da qui
-    la conversione. Serve la superficie della zona, perché la stessa
-    portata in litri bagna molto o poco a seconda di quanto è grande
-    l'area — è il motivo per cui i litri, da soli, non bastano.
+
+def zone_area_m2(zone: dict[str, Any]) -> float | None:
+    """Superficie bagnata dalla linea, dalla sua geometria.
+
+    Gli irrigatori si posano testa a testa — il getto di ognuno arriva
+    sulla testina vicina — quindi il raggio bagnato coincide con
+    l'interasse, e l'area servita da una testina è l'interasse al
+    quadrato. È un'approssimazione, ma è l'approssimazione che usano i
+    progettisti, e sbaglia molto meno di un'area stimata a occhio.
     """
-    mode = zone.get("rate_mode") or "mm_h"
-    if mode == "mm_h":
-        return float(zone.get("rate_mm_h") or 0.0)
-
-    flow = zone.get("flow_value")
-    area = zone.get("area_m2")
     try:
-        flow = float(flow)
-        area = float(area)
+        n = float(zone.get("sprinklers") or 0)
+        passo = float(zone.get("spacing_m") or 0)
     except (TypeError, ValueError):
-        return float(zone.get("rate_mm_h") or 0.0)
+        return None
+    if n <= 0 or passo <= 0:
+        return None
+    fattore = LAYOUT_FACTOR.get(zone.get("layout") or "quadrata", 1.0)
+    return round(n * passo * passo * fattore, 1)
 
-    if flow <= 0 or area <= 0:
-        return float(zone.get("rate_mm_h") or 0.0)
 
-    litres_per_hour = flow * 60.0 if mode == "l_min" else flow
-    return round(litres_per_hour / area, 2)
+def rate_from_flow(litres_per_hour: float, area_m2: float) -> float:
+    """mm/h da litri all'ora e superficie.
+
+    Un litro steso su un metro quadro è alto un millimetro: tutta la
+    conversione sta qui.
+    """
+    if litres_per_hour <= 0 or area_m2 <= 0:
+        return 0.0
+    return round(litres_per_hour / area_m2, 2)
+
+
+def resolve_rate_mm_h(zone: dict[str, Any]) -> float:
+    """Portata della linea in mm/h — l'unico numero che usa il motore."""
+    return float(zone.get("rate_mm_h") or 0.0)
+
+
+def migrate_zone_rate(zone: dict[str, Any]) -> dict[str, Any]:
+    """Porta le vecchie zone al campo unico.
+
+    Fino alla 1.9 la portata poteva essere in litri, con un'unità di
+    misura e una superficie da tenere allineate a mano: tre campi che
+    dovevano essere coerenti fra loro, e se non lo erano i litri venivano
+    ignorati in silenzio. Adesso il numero è uno solo, quindi la
+    conversione si fa una volta qui e i campi vecchi spariscono.
+    """
+    mode = zone.pop("rate_mode", None)
+    flow = zone.pop("flow_value", None)
+    if mode in (None, "mm_h"):
+        return zone
+
+    try:
+        litri = float(flow)
+        area = float(zone.get("area_m2"))
+    except (TypeError, ValueError):
+        return zone
+
+    if litri <= 0 or area <= 0:
+        return zone
+
+    l_h = litri * 60.0 if mode == "l_min" else litri
+    zone["rate_mm_h"] = rate_from_flow(l_h, area)
+    zone["rate_source"] = {
+        "metodo": "litri_convertiti",
+        "l_h": round(l_h, 1),
+        "area_m2": area,
+    }
+    return zone
 
 
 class IrrigazioneStore:
@@ -304,6 +361,7 @@ class IrrigazioneStore:
                 "groups": stored.get("groups") or {},
                 "history": stored.get("history") or [],
                 "map": {**DEFAULT_MAP, **(stored.get("map") or {})},
+                "calibration": stored.get("calibration") or [],
             }
         else:
             self._data = {
@@ -315,10 +373,24 @@ class IrrigazioneStore:
                 "groups": {},
                 "history": [],
                 "map": dict(DEFAULT_MAP),
+                "calibration": [],
             }
 
         self._ensure_groups()
+        self._migrate_zones()
         return self._data
+
+    def _migrate_zones(self) -> None:
+        """Allinea le zone salvate al modello corrente."""
+        cambiate = False
+        for zone_id, zone in list(self._data["zones"].items()):
+            prima = dict(zone)
+            aggiornata = migrate_zone_rate({**ZONE_FIELDS, **ZONE_RUNTIME, **zone})
+            if aggiornata != prima:
+                self._data["zones"][zone_id] = aggiornata
+                cambiate = True
+        if cambiate:
+            self._save()
 
     def _ensure_groups(self) -> None:
         """Crea i gruppi mancanti, ereditando la finestra di sistema.
@@ -382,6 +454,21 @@ class IrrigazioneStore:
     def async_save_daily(self, daily: dict[str, Any]) -> None:
         """Sostituisce gli accumulatori giornalieri e persiste."""
         self._data["daily"] = daily
+        self._save()
+
+    @property
+    def calibration(self) -> list[dict[str, Any]]:
+        """Esito dell'ultima taratura, linea per linea."""
+        return self._data.get("calibration") or []
+
+    def async_save_calibration(self, risultati: list[dict[str, Any]]) -> None:
+        """Conserva l'ultima taratura.
+
+        Sopravvive alla chiusura della pagina: la misura costa minuti di
+        acqua e attesa, e ritrovarsela persa perché si è cambiato scheda
+        sarebbe il modo più veloce per non farla più.
+        """
+        self._data["calibration"] = risultati
         self._save()
 
     def async_set_runtime(self, zone_id: str, **fields: Any) -> None:

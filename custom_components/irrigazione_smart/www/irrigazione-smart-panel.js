@@ -520,7 +520,11 @@ class IrrigazioneSmartPanel extends HTMLElement {
      lampeggiare la linea sbagliata per mezz'ora. */
   _wateringZoneId() {
     const running = (this._overview && this._overview.running) || {};
-    if (!running.active || running.phase !== "irrigazione") return null;
+    // durante la taratura la valvola è aperta, ma non si sta irrigando:
+    // sono due minuti di misura, e chiamarla irrigazione mentirebbe sia
+    // al pallino sia al bilancio
+    if (!running.active || running.mode === "taratura") return null;
+    if (running.phase !== "irrigazione") return null;
     return running.zone_id || null;
   }
 
@@ -826,6 +830,10 @@ class IrrigazioneSmartPanel extends HTMLElement {
     onClick(".run-group", (e) =>
       this._avviaSequenza(e.currentTarget.getAttribute("data-cat"))
     );
+    onClick(".calibrate-open", () =>
+      this._openCalibrationDialog(this._tab.slice(2))
+    );
+    onClick(".calibrate-apply", () => this._applyCalibration());
     onClick(".edit-group", () => this._openGroupDialog(this._tab.slice(2)));
     onClick(".day-chip", (e) => {
       const el = e.currentTarget;
@@ -1441,6 +1449,9 @@ class IrrigazioneSmartPanel extends HTMLElement {
       </div></ha-card>
 
       ${this._groupScheduleCard(group, label, category)}
+      ${this._calibrationCard()}
+      ${this._calibrationStart(category)}
+      ${this._calibrationResults(category)}
 
       <div class="tab-actions">
         ${this._button("add-zone", "Aggiungi linea", { primary: true })}
@@ -1980,6 +1991,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
     const running = zones.filter((z) => (z.computed || {}).plan?.should_run);
 
     return `
+      ${this._calibrationCard()}
       ${this._runningCard()}
       ${this._masterCard(sys, zones, running, sched)}
       ${this._linesCard(zones)}
@@ -1989,11 +2001,263 @@ class IrrigazioneSmartPanel extends HTMLElement {
     `;
   }
 
+  /* ------------------------------------------------------------ taratura
+
+     Misurare la portata vera è l'unica cosa che rende sensati tutti gli
+     altri numeri: senza, le durate sono aritmetica su un'ipotesi. La
+     prova apre ogni linea per due minuti — trenta secondi buttati per
+     mandare in pressione, gli ultimi cinque per non contare la chiusura
+     — e conta i litri che passano dal contatore. */
+
+  _fase(nome) {
+    return {
+      apertura: "sto aprendo la valvola",
+      stabilizzazione: "aspetto che l'impianto vada a regime",
+      misura: "sto contando i litri",
+      chiusura: "sto chiudendo la valvola",
+      attesa: "pausa prima della linea successiva",
+    }[nome] || nome || "";
+  }
+
+  /* Avanzamento della prova, con la barra della fase in corso. */
+  _calibrationCard() {
+    const r = this._overview.running || {};
+    if (!r.active || r.mode !== "taratura") return "";
+
+    const totale = r.total || 0;
+    const fatte = (r.results || []).length;
+    const pct = totale ? Math.round((fatte / totale) * 100) : 0;
+
+    return `<ha-card><div class="inner">
+      <div class="master-row">
+        <div class="master-icon on pulse"><ha-icon icon="mdi:gauge"></ha-icon></div>
+        <div class="master-main">
+          <span class="master-title">Taratura in corso</span>
+          <span class="sub">linea ${r.index || 1} di ${totale} · ${esc(
+            r.zone_name || ""
+          )}</span>
+        </div>
+        ${this._button("stop-all", "Ferma tutto", { danger: true })}
+      </div>
+
+      <div class="row activity">
+        <ha-icon icon="mdi:progress-clock"></ha-icon>
+        <div class="row-main">
+          <span class="row-label">${esc(this._fase(r.phase))}</span>
+          <span class="sub" data-wait-text>${
+            r.phase_seconds_left != null
+              ? this._waitText(r.phase_seconds_left / 60)
+              : ""
+          }</span>
+        </div>
+        ${
+          r.phase === "misura"
+            ? `<span class="reading">${Number(r.litri || 0).toFixed(1)} L</span>`
+            : ""
+        }
+      </div>
+      ${
+        r.phase_ends_at && r.phase_total_s
+          ? `<div class="bar wait">
+               <div class="bar-fill" data-wait-fill data-ends="${esc(r.phase_ends_at)}"
+                    data-total="${r.phase_total_s / 60}" style="width:100%"></div>
+             </div>`
+          : ""
+      }
+      <div class="bar big"><div class="bar-fill" style="width:${pct}%"></div></div>
+      <div class="zone-meta">
+        <span>${fatte} di ${totale} linee misurate</span>
+        <span class="spacer"></span>
+        <span class="muted">non è un'irrigazione: sono due minuti a linea</span>
+      </div>
+    </div></ha-card>`;
+  }
+
+  /* L'esito dell'ultima prova, con i mm/h che ne derivano. */
+  _calibrationResults(category) {
+    const risultati = this._overview.calibration || [];
+    if (!risultati.length) return "";
+
+    const zones = this._overview.zones || [];
+    const miei = risultati.filter((r) => {
+      const z = zones.find((x) => x.id === r.zone_id);
+      return z && (!category || (z.category || "altro") === category);
+    });
+    if (!miei.length) return "";
+
+    const righe = miei
+      .map((r) => {
+        const z = zones.find((x) => x.id === r.zone_id) || {};
+        const area = this._areaOf(z);
+        const mm = area && r.l_h ? r.l_h / area : 0;
+        const dettaglio = r.errore
+          ? `<span class="badge warn">${esc(r.errore)}</span>`
+          : area
+          ? `<span class="badge ok">${mm.toFixed(1)} mm/h</span>`
+          : `<span class="badge muted">manca la geometria</span>`;
+        return `<div class="row">
+          <ha-icon icon="mdi:gauge"></ha-icon>
+          <div class="row-main">
+            <span class="row-label">${esc(r.nome || "")}</span>
+            <span class="sub">${
+              r.errore
+                ? "nessuna misura"
+                : `${Number(r.litri || 0).toFixed(1)} L in ${r.secondi} s · ` +
+                  `${Number(r.l_h || 0).toFixed(0)} L/h` +
+                  (area ? ` su ${area} m²` : "")
+            }</span>
+          </div>
+          ${dettaglio}
+        </div>`;
+      })
+      .join("");
+
+    const applicabili = miei.filter(
+      (r) => !r.errore && r.l_h && this._areaOf(zones.find((x) => x.id === r.zone_id) || {})
+    );
+
+    return `<ha-card><div class="inner">
+      <div class="card-head">
+        <ha-icon icon="mdi:gauge"></ha-icon>
+        <h2>Ultima taratura</h2>
+        <span class="spacer"></span>
+        ${
+          applicabili.length
+            ? this._button("calibrate-apply", `Applica a ${applicabili.length}`, {
+                primary: true,
+              })
+            : ""
+        }
+      </div>
+      <p class="muted small nomargin">
+        I litri sono quelli contati davvero. I mm/h escono dividendoli per
+        la superficie che la linea bagna, calcolata dagli irrigatori e dal
+        loro interasse.
+      </p>
+      ${righe}
+    </div></ha-card>`;
+  }
+
+  /* L'invito a tarare, quando non c'è una prova in corso. */
+  _calibrationStart(category) {
+    const busy = !!(this._overview.running || {}).active;
+    const zones = (this._overview.zones || []).filter(
+      (z) => (z.category || "altro") === category
+    );
+    const misurate = zones.filter(
+      (z) => (z.rate_source || {}).metodo === "flussostato"
+    ).length;
+
+    return `<ha-card><div class="inner">
+      <div class="card-head">
+        <ha-icon icon="mdi:gauge"></ha-icon>
+        <h2>Taratura della portata</h2>
+        <span class="spacer"></span>
+        ${
+          busy
+            ? `<span class="badge muted">impianto occupato</span>`
+            : this._button("calibrate-open", "Tara le linee", { primary: true })
+        }
+      </div>
+      <p class="muted small nomargin">
+        Apre ogni linea per due minuti e conta i litri che passano dal
+        contatore: i primi trenta secondi non contano — l'impianto deve
+        andare in pressione — e nemmeno gli ultimi cinque. Fra una linea e
+        l'altra passa un minuto. ${
+          misurate
+            ? `Finora ${misurate} ${
+                misurate === 1 ? "linea è misurata" : "linee sono misurate"
+              } così.`
+            : "Nessuna linea è ancora stata misurata: le durate girano su una portata ipotizzata."
+        }
+      </p>
+    </div></ha-card>`;
+  }
+
+  /* Scelta delle linee da provare. */
+  _openCalibrationDialog(category) {
+    const zones = (this._overview.zones || []).filter(
+      (z) => (z.category || "altro") === category
+    );
+    const disponibili = zones.filter((z) => z.valve_entity);
+    if (!disponibili.length) {
+      this._setNotice(
+        "Nessuna linea di questo gruppo ha una valvola: senza, non c'è niente da aprire."
+      );
+      this._render();
+      return;
+    }
+
+    const specs = [];
+    const iniziali = {};
+    disponibili.forEach((z) => {
+      const area = this._areaOf(z);
+      specs.push({
+        key: `z_${z.id}`,
+        label: z.name,
+        type: "boolean",
+        helper: area
+          ? `${z.sprinklers} irrigatori a ${z.spacing_m} m → ${area} m²`
+          : "manca la geometria: i litri si misurano lo stesso, i mm/h si " +
+            "calcolano appena la inserisci",
+      });
+      iniziali[`z_${z.id}`] = true;
+    });
+
+    this._showForm(
+      "Tarare quali linee?",
+      specs,
+      iniziali,
+      async (values) => {
+        const scelte = disponibili
+          .filter((z) => values[`z_${z.id}`])
+          .map((z) => ({ zone_id: z.id }));
+        if (!scelte.length) return;
+
+        const minuti = Math.ceil((scelte.length * 3 - 1) * 10) / 10;
+        this._setNotice(
+          `Taratura avviata su ${scelte.length} ${
+            scelte.length === 1 ? "linea" : "linee"
+          }: ci vogliono circa ${minuti} minuti.`
+        );
+        await this._mutate("POST", "calibration", { zones: scelte });
+      },
+      "Avvia la prova"
+    );
+  }
+
+  /* Scrive sulle linee i mm/h appena misurati. */
+  async _applyCalibration() {
+    const zones = this._overview.zones || [];
+    const results = (this._overview.calibration || []).filter((r) => {
+      const z = zones.find((x) => x.id === r.zone_id);
+      return !r.errore && r.l_h && z && this._areaOf(z);
+    });
+    if (!results.length) return;
+
+    await this._mutate("POST", "calibration/apply", { results });
+    this._setNotice(
+      `Portata aggiornata su ${results.length} ${
+        results.length === 1 ? "linea" : "linee"
+      }: da adesso le durate escono da una misura, non da una stima.`
+    );
+    this._render();
+  }
+
+  /* Superficie bagnata da una linea, dalla sua geometria. */
+  _areaOf(zone) {
+    const n = Number(zone.sprinklers || 0);
+    const passo = Number(zone.spacing_m || 0);
+    if (!(n > 0) || !(passo > 0)) return 0;
+    const fattore = zone.layout === "triangolare" ? 0.866 : 1;
+    return Math.round(n * passo * passo * fattore * 10) / 10;
+  }
+
   /* Mostrata solo mentre l'irrigazione è davvero in corso: la barra
      avanza sul tempo della linea corrente. */
   _runningCard() {
     const r = this._overview.running || {};
-    if (!r.active) return "";
+    if (!r.active || r.mode === "taratura") return "";
 
     // "pausa di assorbimento" faceva pensare che l'impianto stesse
     // aspettando prima di passare alla linea dopo. Aspetta invece di
@@ -2187,6 +2451,8 @@ class IrrigazioneSmartPanel extends HTMLElement {
   _activityText() {
     const r = this._overview.running || {};
     if (!r.active) return null;
+    // la taratura ha una scheda tutta sua, con le sue fasi
+    if (r.mode === "taratura") return null;
 
     const nome = r.zone_name || "";
     const passata =
@@ -2226,7 +2492,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
      conto si fa sui minuti d'acqua di tutte le linee messe insieme. */
   _overallProgress() {
     const r = this._overview.running || {};
-    if (!r.active || !r.progress_total_min) return "";
+    if (!r.active || r.mode === "taratura" || !r.progress_total_min) return "";
 
     const pct = Math.min(100, Number(r.progress_overall || 0));
     const linee = Object.values(r.progress_zones || {});
@@ -2382,24 +2648,28 @@ class IrrigazioneSmartPanel extends HTMLElement {
      facendo credere che il numero a destra venisse da quello a sinistra. */
   _rateText(z) {
     const mm = `${z.rate_mm_h} mm/h`;
-    if (!z.rate_mode || z.rate_mode === "mm_h" || !z.flow_value) return mm;
+    const src = z.rate_source || {};
+    if (src.metodo !== "flussostato") return `${mm} · da tarare`;
 
-    const unita = z.rate_mode === "l_min" ? "L/min" : "L/h";
-    if (!(Number(z.area_m2) > 0)) {
-      return `${z.flow_value} ${unita} senza superficie: in uso ${mm}`;
-    }
-    return `${z.flow_value} ${unita} su ${z.area_m2} m² → ${mm}`;
+    const quando = src.quando ? new Date(src.quando) : null;
+    const data =
+      quando && !isNaN(quando)
+        ? ` il ${String(quando.getDate()).padStart(2, "0")}/${String(
+            quando.getMonth() + 1
+          ).padStart(2, "0")}`
+        : "";
+    return `${mm} · misurata${data} (${Math.round(src.l_h || 0)} L/h su ${
+      src.area_m2
+    } m²)`;
   }
 
-  /* True se la portata è stata inserita in litri ma manca la superficie:
-     i litri non vengono usati e la durata esce da un numero di riserva. */
+  /* True finché la portata non è stata misurata davvero.
+
+     Non è un errore di configurazione: è che quella durata esce da un
+     numero ipotizzato, e finché resta tale ogni conto a valle vale
+     quanto l'ipotesi. Si segnala, non si blocca. */
   _rateIncomplete(z) {
-    return (
-      z.rate_mode &&
-      z.rate_mode !== "mm_h" &&
-      !!z.flow_value &&
-      !(Number(z.area_m2) > 0)
-    );
+    return (z.rate_source || {}).metodo !== "flussostato";
   }
 
   /* Ultima irrigazione: le forzature si segnalano ma restano secondarie
@@ -2548,12 +2818,11 @@ class IrrigazioneSmartPanel extends HTMLElement {
       </div>
       ${
         this._rateIncomplete(z)
-          ? `<ha-alert alert-type="warning">
-               La portata è in litri ma manca la superficie della zona, quindi
-               i litri non vengono usati: la durata esce dai ${z.rate_mm_h} mm/h
-               del campo apposito. Un litro su un metro quadro fa un
-               millimetro — senza sapere su quanti metri quadri cade, i litri
-               non dicono quanto bagnano.
+          ? `<ha-alert alert-type="info">
+               La portata di questa linea non è mai stata misurata: i
+               ${z.rate_mm_h} mm/h sono un'ipotesi, e ogni durata calcolata
+               qui sotto vale quanto quell'ipotesi. Con un contatore la
+               taratura dura due minuti.
              </ha-alert>`
           : ""
       }
@@ -4026,6 +4295,18 @@ class IrrigazioneSmartPanel extends HTMLElement {
             ...(spec.suffix ? { unit_of_measurement: spec.suffix } : {}),
           },
         };
+      // Un cursore invece di una casella: il correttore non è una misura
+      // da inserire, è una manopola che si sposta guardando il prato, e
+      // due estremi visibili dicono quanto ci si sta spingendo.
+      case "slider":
+        return {
+          number: {
+            mode: "slider",
+            step: spec.step ?? 0.05,
+            min: spec.min ?? 0,
+            max: spec.max ?? 2,
+          },
+        };
       case "select":
         return {
           select: {
@@ -4116,6 +4397,37 @@ class IrrigazioneSmartPanel extends HTMLElement {
       input = document.createElement("input");
       input.type = "checkbox";
       input.checked = !!values[spec.key];
+    } else if (spec.type === "slider") {
+      // il cursore da solo non dice dove si è finiti: il numero lo
+      // affianca e si aggiorna mentre si trascina
+      input = document.createElement("input");
+      input.className = "slider-input";
+      input.type = "range";
+      input.min = spec.min ?? 0;
+      input.max = spec.max ?? 2;
+      input.step = spec.step ?? 0.05;
+      const letto = document.createElement("span");
+      letto.className = "slider-value";
+      const mostra = () => {
+        letto.textContent = Number(input.value).toFixed(2);
+      };
+      input.addEventListener("input", mostra);
+      const box = document.createElement("div");
+      box.className = "slider-box";
+      box.append(input, letto);
+      row.appendChild(box);
+      input.value = values[spec.key] ?? 1;
+      mostra();
+      input.addEventListener("input", () => {
+        values[spec.key] = Number(input.value);
+      });
+      if (spec.helper) {
+        const help = document.createElement("span");
+        help.className = "fld-helper";
+        help.textContent = spec.helper;
+        row.appendChild(help);
+      }
+      return row;
     } else {
       input = document.createElement("input");
       input.className = "ha-control";
@@ -4323,7 +4635,8 @@ class IrrigazioneSmartPanel extends HTMLElement {
       rate_mm_h: 10, emitter: "statici", corrector: 1.0, soil: INHERIT_STR,
       kc: INHERIT_NUM, root_depth_cm: INHERIT_NUM, mad: INHERIT_NUM,
       max_runtime_min: INHERIT_NUM, deficit_mm: 0, icon: "",
-      rate_mode: "mm_h", flow_value: undefined, area_m2: undefined,
+      sprinklers: undefined, spacing_m: undefined, layout: "quadrata",
+      flow_entity: undefined,
     };
     const inh = (v) => (v == null || Number(v) === INHERIT_NUM ? "" : v);
 
@@ -4360,34 +4673,43 @@ class IrrigazioneSmartPanel extends HTMLElement {
       },
       { type: "section", label: "Portata" },
       {
-        key: "rate_mode", label: "Unità di misura", type: "select",
-        options: ["mm_h", "l_h", "l_min"],
-        labels: {
-          mm_h: "Millimetri all'ora (mm/h)",
-          l_h: "Litri all'ora (L/h)",
-          l_min: "Litri al minuto (L/min)",
-        },
-        helper: "In litri serve anche la superficie: la stessa portata bagna molto o poco secondo l'area",
-      },
-      {
-        key: "rate_mm_h", label: "Portata in mm/h", type: "number", suffix: "mm/h",
-        helper: "Misurata col tuna can test. Usata se l'unità sopra è mm/h",
-      },
-      {
-        key: "flow_value", label: "Portata in litri", type: "number", suffix: "L",
-        helper: "Il valore di targa dell'impianto, all'ora o al minuto",
-      },
-      {
-        key: "area_m2", label: "Superficie della zona", type: "number", suffix: "m²",
+        key: "rate_mm_h", label: "Portata", type: "number", suffix: "mm/h",
         helper:
-          "Obbligatoria se la portata è in litri: senza, i litri vengono " +
-          "ignorati. È l'area che questa linea bagna davvero, e la portata " +
-          "è la somma di tutti gli irrigatori della linea",
+          "Quanti millimetri d'acqua la linea posa in un'ora. È l'unico " +
+          "numero che il motore usa: si misura col flussostato o col tuna " +
+          "can test, non si tira a indovinare",
+      },
+      {
+        key: "sprinklers", label: "Quanti irrigatori", type: "number",
+        helper: "Le testine servite da questa linea",
+      },
+      {
+        key: "spacing_m", label: "Interasse", type: "number", suffix: "m",
+        helper:
+          "Distanza fra due testine vicine, col metro. Da qui esce la " +
+          "superficie bagnata, senza doverla misurare",
+      },
+      {
+        key: "layout", label: "Posa", type: "select",
+        options: ["quadrata", "triangolare"],
+        labels: {
+          quadrata: "A quadrato (file allineate)",
+          triangolare: "A triangolo (file sfalsate)",
+        },
+      },
+      {
+        key: "flow_entity", label: "Contatore di questa linea", type: "entity",
+        domains: ["sensor"],
+        helper: "Vuoto = quello di sistema. Serve solo alla taratura",
       },
       { type: "section", label: "Taratura" },
       {
-        key: "corrector", label: "Correttore", type: "number",
-        helper: "1.0 = nessuna correzione. Si tara osservando il prato",
+        key: "corrector", label: "Correttore", type: "slider",
+        min: 0, max: 2, step: 0.05,
+        helper:
+          "1,00 = quanto dice il calcolo. Si sposta guardando il prato: " +
+          "sotto 1 dà meno acqua, sopra ne dà di più. A 0 la linea non " +
+          "irriga mai",
       },
 
       { type: "section", label: "Override (vuoto = eredita)" },
@@ -4420,9 +4742,10 @@ class IrrigazioneSmartPanel extends HTMLElement {
       emitter: z.emitter,
       icon: z.icon || undefined,
       rate_mm_h: z.rate_mm_h,
-      rate_mode: z.rate_mode || "mm_h",
-      flow_value: z.flow_value ?? undefined,
-      area_m2: z.area_m2 ?? undefined,
+      sprinklers: z.sprinklers ?? undefined,
+      spacing_m: z.spacing_m ?? undefined,
+      layout: z.layout || "quadrata",
+      flow_entity: z.flow_entity || undefined,
       corrector: z.corrector,
       soil: z.soil,
       kc: inh(z.kc),
@@ -4447,6 +4770,11 @@ class IrrigazioneSmartPanel extends HTMLElement {
         if (!data.valve_entity) data.valve_entity = null;
         if (!data.battery_entity) data.battery_entity = null; // svuotato = rimossa
         if (!data.icon) data.icon = null;
+        if (!data.flow_entity) data.flow_entity = null;
+        // la geometria è facoltativa: senza, resta la portata inserita
+        ["sprinklers", "spacing_m"].forEach((k) => {
+          if (data[k] === "" || data[k] == null) data[k] = null;
+        });
 
         if (zone) await this._mutate("POST", `zones/${zone.id}`, data);
         else await this._mutate("POST", "zones", data);
@@ -5081,6 +5409,13 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .btn.primary:hover { filter: brightness(1.08); }
       .btn.danger { background: var(--error-color, #db4437); color: #fff; }
       .empty-cta { margin-top: 14px; }
+
+      /* cursore di riserva, quando ha-selector non è disponibile */
+      .slider-box { display: flex; align-items: center; gap: 12px; }
+      .slider-input { flex: 1 1 auto; accent-color: var(--primary-color); }
+      .slider-value { font-size: 15px; font-weight: 600; min-width: 44px;
+                      text-align: right; font-variant-numeric: tabular-nums;
+                      color: var(--primary-text-color); }
 
       /* riga di un campo costruito con ha-selector */
       .field { display: flex; flex-direction: column; gap: 4px; }

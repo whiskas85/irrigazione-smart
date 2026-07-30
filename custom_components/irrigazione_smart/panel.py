@@ -57,7 +57,13 @@ from .hydro import (
 )
 from .notifier import HOOK_LABELS, build_context, get_notifier
 from .scheduler import get_scheduler
-from .store import WEEKDAYS, IrrigazioneStore, ulid_now
+from .store import (
+    WEEKDAYS,
+    IrrigazioneStore,
+    rate_from_flow,
+    ulid_now,
+    zone_area_m2,
+)
 
 PANEL_URL_PATH = "irrigazione-smart"
 PANEL_TITLE = "Irrigazione"
@@ -228,6 +234,8 @@ def _build_overview(hass: HomeAssistant) -> dict[str, Any]:
         "zones": zones,
         "groups": _groups_payload(hass, store, plans),
         "map": _map_payload(store),
+        # esito dell'ultima taratura, per riproporlo alla riapertura
+        "calibration": store.calibration,
         "running": executor.status() if executor else {"active": False},
         "flow": _flow_payload(hass, system),
         "schedule": _schedule_payload(plans, window, system),
@@ -969,6 +977,101 @@ class StopView(HomeAssistantView):
         return self.json({"overview": _build_overview(hass)})
 
 
+class CalibrationView(HomeAssistantView):
+    """Taratura: misura la portata reale, linea per linea."""
+
+    url = "/api/irrigazione_smart/calibration"
+    name = "api:irrigazione_smart:calibration"
+    requires_auth = True
+
+    async def post(self, request):
+        """Avvia la prova sulle linee indicate.
+
+        La geometria arriva insieme all'elenco e viene salvata subito sulle
+        zone: descrive l'impianto, non la prova, e serve comunque a
+        ricalcolare i mm/h anche a distanza di mesi.
+        """
+        _require_admin(request)
+        hass: HomeAssistant = request.app["hass"]
+        store = _get_store(hass)
+        executor = get_executor(hass)
+        if store is None or executor is None:
+            return self.json_message("Integration non configurata", 400)
+
+        payload = await request.json()
+        zone_ids: list[str] = []
+        for voce in payload.get("zones") or []:
+            zone_id = voce.get("zone_id")
+            if zone_id not in store.zones:
+                continue
+            geometria = {
+                chiave: voce[chiave]
+                for chiave in ("sprinklers", "spacing_m", "layout", "flow_entity")
+                if chiave in voce
+            }
+            if geometria:
+                store.async_update_zone(zone_id, geometria)
+            zone_ids.append(zone_id)
+
+        if not zone_ids:
+            return self.json_message("Nessuna linea da tarare", 400)
+
+        if not await executor.async_start_calibration(zone_ids):
+            return self.json_message("Irrigazione o taratura già in corso", 409)
+
+        return self.json({"avviata": True, "overview": _build_overview(hass)})
+
+
+class CalibrationApplyView(HomeAssistantView):
+    """Scrive sulla linea la portata appena misurata."""
+
+    url = "/api/irrigazione_smart/calibration/apply"
+    name = "api:irrigazione_smart:calibration:apply"
+    requires_auth = True
+
+    async def post(self, request):
+        _require_admin(request)
+        hass: HomeAssistant = request.app["hass"]
+        store = _get_store(hass)
+        if store is None:
+            return self.json_message("Integration non configurata", 400)
+
+        payload = await request.json()
+        applicate = 0
+        for voce in payload.get("results") or []:
+            zone = store.zones.get(voce.get("zone_id"))
+            if zone is None:
+                continue
+            try:
+                l_h = float(voce.get("l_h"))
+            except (TypeError, ValueError):
+                continue
+
+            area = zone_area_m2(zone)
+            mm_h = rate_from_flow(l_h, area) if area else 0.0
+            if mm_h <= 0:
+                continue
+
+            store.async_update_zone(
+                zone["id"],
+                {
+                    "rate_mm_h": mm_h,
+                    "area_m2": area,
+                    "rate_source": {
+                        "metodo": "flussostato",
+                        "quando": voce.get("quando") or dt_util.now().isoformat(),
+                        "l_h": l_h,
+                        "litri": voce.get("litri"),
+                        "secondi": voce.get("secondi"),
+                        "area_m2": area,
+                    },
+                },
+            )
+            applicate += 1
+
+        return self.json({"applicate": applicate, "overview": _build_overview(hass)})
+
+
 class SystemView(HomeAssistantView):
     """Modifica delle impostazioni di sistema."""
 
@@ -1048,6 +1151,8 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
         hass.http.register_view(ItemDetailView())
         hass.http.register_view(RunView())
         hass.http.register_view(StopView())
+        hass.http.register_view(CalibrationView())
+        hass.http.register_view(CalibrationApplyView())
         domain_data[_HTTP_FLAG] = True
 
     if not domain_data.get(_PANEL_FLAG):

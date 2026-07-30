@@ -26,6 +26,10 @@ from homeassistant.util import dt as dt_util
 
 from .activity_log import ERROR, WARNING, get_log
 from .const import (
+    CALIBRATION_GAP_S,
+    CALIBRATION_RUN_S,
+    CALIBRATION_TAIL_S,
+    CALIBRATION_WARMUP_S,
     DOMAIN,
     EVENT_FINISHED,
     EVENT_STARTED,
@@ -47,7 +51,7 @@ from .hydro import (
     interleave_cycles,
     resolve_zone_params,
 )
-from .store import IrrigazioneStore
+from .store import IrrigazioneStore, rate_from_flow, zone_area_m2
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -127,6 +131,18 @@ class IrrigationExecutor:
             return {"active": False}
 
         state = dict(self._state)
+
+        # La taratura occupa lo stesso posto di un'irrigazione ma non ha
+        # né deficit né passate: i conti qui sotto non la riguardano, e
+        # applicarglieli darebbe percentuali senza senso.
+        if state.get("mode") == "taratura":
+            ends = state.get("phase_ends_at")
+            if ends is not None:
+                restanti = (ends - dt_util.utcnow()).total_seconds()
+                state["phase_seconds_left"] = round(max(0.0, restanti), 1)
+                state["phase_ends_at"] = ends.isoformat()
+            state["active"] = True
+            return state
 
         ends = state.get("wait_ends_at")
         if ends is not None:
@@ -500,6 +516,260 @@ class IrrigationExecutor:
 
         self._task = self._hass.async_create_task(self._run(queue, trigger=trigger))
         return True
+
+    # ------------------------------------------------------------ taratura
+
+    async def async_start_calibration(self, zone_ids: list[str]) -> bool:
+        """Misura la portata reale delle linee, una dopo l'altra.
+
+        Occupa lo stesso posto di un'irrigazione — non si può tarare
+        mentre si irriga, e *Ferma tutto* ferma anche questa — e usa le
+        stesse aperture e chiusure verificate: qui le valvole si aprono
+        davvero, e una che non richiude è grave esattamente come durante
+        un'irrigazione.
+        """
+        if self.running:
+            _LOGGER.warning("Irrigazione o taratura già in corso: comando ignorato")
+            return False
+
+        queue = [zid for zid in zone_ids if zid in self._store.zones]
+        if not queue:
+            return False
+
+        self._task = self._hass.async_create_task(self._calibrate(queue))
+        return True
+
+    def _flow_entity_for(self, zone: dict[str, Any]) -> str | None:
+        """Contatore che vede questa linea: il suo, o quello di sistema."""
+        return zone.get("flow_entity") or self._store.system.get("flow_entity")
+
+    def _flow_reading(self, entity_id: str) -> tuple[float, str] | None:
+        """Valore e unità del contatore, se leggibile adesso."""
+        state = self._hass.states.get(entity_id)
+        if state is None or state.state in ("unknown", "unavailable"):
+            return None
+        try:
+            valore = float(state.state)
+        except (TypeError, ValueError):
+            return None
+        unita = (state.attributes.get("unit_of_measurement") or "").strip()
+        return valore, unita
+
+    @staticmethod
+    def _is_counter(unit: str, state_class: str | None) -> bool:
+        """True se il sensore conta un totale invece di una portata.
+
+        Un totale è il dato migliore: la differenza fra due letture è
+        l'acqua uscita, senza errori di integrazione. Le portate
+        istantanee vanno invece sommate campione per campione.
+        """
+        if state_class in ("total", "total_increasing"):
+            return True
+        return unit.lower() in ("l", "litri", "m³", "m3")
+
+    @staticmethod
+    def _litres_of(valore: float, unita: str) -> float:
+        """Converte una lettura cumulata in litri."""
+        return valore * 1000.0 if unita.lower() in ("m³", "m3") else valore
+
+    @staticmethod
+    def _litres_per_second(valore: float, unita: str) -> float:
+        """Converte una portata istantanea in litri al secondo."""
+        u = unita.lower().replace(" ", "")
+        if u in ("l/min", "lpm", "litri/min"):
+            return valore / 60.0
+        if u in ("l/h", "l/ora"):
+            return valore / 3600.0
+        if u in ("m³/h", "m3/h"):
+            return valore * 1000.0 / 3600.0
+        if u in ("m³/min", "m3/min"):
+            return valore * 1000.0 / 60.0
+        # senza unità riconosciuta si assume il caso più comune, L/min
+        return valore / 60.0
+
+    async def _phase(
+        self, nome: str, secondi: int, *, misura: dict[str, Any] | None = None
+    ) -> None:
+        """Attende una fase, pubblicando il conto alla rovescia.
+
+        Il conto lo pubblica il server e non lo indovina la pagina: la
+        taratura dura minuti e chi guarda deve vedere che sta succedendo
+        qualcosa, non una barra ferma.
+        """
+        fine = dt_util.utcnow() + timedelta(seconds=secondi)
+        self._publish(
+            phase=nome,
+            phase_total_s=secondi,
+            phase_ends_at=fine,
+        )
+
+        while True:
+            restanti = (fine - dt_util.utcnow()).total_seconds()
+            if restanti <= 0:
+                return
+            # durante la misura si campiona la portata istantanea
+            if misura is not None:
+                self._sample_flow(misura)
+            await asyncio.sleep(min(1.0, restanti))
+
+    def _sample_flow(self, misura: dict[str, Any]) -> None:
+        """Aggiunge un campione alla misura in corso."""
+        lettura = self._flow_reading(misura["entity_id"])
+        if lettura is None:
+            return
+        valore, unita = lettura
+        adesso = dt_util.utcnow()
+
+        if misura["counter"]:
+            misura["litri"] = max(
+                0.0, self._litres_of(valore, unita) - misura["partenza"]
+            )
+        else:
+            precedente = misura.get("ultimo_istante")
+            if precedente is not None:
+                dt = (adesso - precedente).total_seconds()
+                misura["litri"] += self._litres_per_second(valore, unita) * dt
+        misura["ultimo_istante"] = adesso
+        self._publish(litri=round(misura["litri"], 1))
+
+    async def _calibrate(self, zone_ids: list[str]) -> None:
+        """Apre ogni linea per due minuti e conta l'acqua che passa."""
+        log = get_log(self._hass)
+        risultati: list[dict[str, Any]] = []
+        totale = len(zone_ids)
+        self._state = {"mode": "taratura", "total": totale, "results": []}
+        if log:
+            log.add("config", f"Taratura avviata su {totale} linee")
+
+        try:
+            for indice, zone_id in enumerate(zone_ids, start=1):
+                zone = self._store.zones.get(zone_id) or {}
+                esito = await self._calibrate_zone(zone, indice, totale)
+                risultati.append(esito)
+                self._publish(results=list(risultati))
+
+                if indice < totale:
+                    await self._phase("attesa", CALIBRATION_GAP_S)
+        except asyncio.CancelledError:
+            if log:
+                log.add("config", "Taratura interrotta", level=WARNING)
+            raise
+        finally:
+            self._store.async_save_calibration(risultati)
+            self._state = {}
+            async_dispatcher_send(self._hass, SIGNAL_STATE_CHANGED)
+
+        if log:
+            misurate = sum(1 for r in risultati if r.get("l_h"))
+            log.add("config", f"Taratura conclusa: {misurate} di {totale} misurate")
+
+    async def _calibrate_zone(
+        self, zone: dict[str, Any], indice: int, totale: int
+    ) -> dict[str, Any]:
+        """Una singola linea: apre, aspetta il regime, misura, chiude."""
+        zone_id = zone.get("id")
+        nome = zone.get("name") or "Linea"
+        valve = zone.get("valve_entity")
+        esito: dict[str, Any] = {"zone_id": zone_id, "nome": nome}
+
+        self._publish(
+            active=True,
+            mode="taratura",
+            zone_id=zone_id,
+            zone_name=nome,
+            index=indice,
+            total=totale,
+            litri=0.0,
+        )
+
+        if not valve:
+            esito["errore"] = "nessuna valvola configurata"
+            return esito
+
+        entity_id = self._flow_entity_for(zone)
+        if not entity_id:
+            esito["errore"] = "nessun contatore configurato"
+            return esito
+
+        self._publish(phase="apertura", phase_total_s=0, phase_ends_at=None)
+        if not await self._open_with_confirm(valve, nome):
+            esito["errore"] = "la valvola non ha confermato l'apertura"
+            return esito
+
+        try:
+            await self._phase("stabilizzazione", CALIBRATION_WARMUP_S)
+
+            lettura = self._flow_reading(entity_id)
+            state = self._hass.states.get(entity_id)
+            unita = (
+                (state.attributes.get("unit_of_measurement") or "") if state else ""
+            )
+            counter = self._is_counter(
+                unita, state.attributes.get("state_class") if state else None
+            )
+            misura = {
+                "entity_id": entity_id,
+                "counter": counter,
+                "partenza": self._litres_of(lettura[0], unita) if lettura else 0.0,
+                "litri": 0.0,
+                "ultimo_istante": None,
+            }
+            secondi = CALIBRATION_RUN_S - CALIBRATION_WARMUP_S - CALIBRATION_TAIL_S
+            await self._phase("misura", secondi, misura=misura)
+            self._sample_flow(misura)
+            litri = round(misura["litri"], 2)
+        finally:
+            self._publish(phase="chiusura", phase_total_s=0, phase_ends_at=None)
+            await self._close_confirmed(valve, nome)
+
+        esito.update(
+            {
+                "litri": litri,
+                "secondi": secondi,
+                "l_h": round(litri * 3600.0 / secondi, 1) if secondi else None,
+                "contatore": entity_id,
+                "quando": dt_util.now().isoformat(),
+            }
+        )
+        if not litri:
+            esito["errore"] = "il contatore non ha visto passare acqua"
+        self._credit_calibration(zone, esito)
+        return esito
+
+    def _credit_calibration(self, zone: dict[str, Any], esito: dict[str, Any]) -> None:
+        """Mette a bilancio l'acqua uscita durante la prova.
+
+        Sono due minuti, non un'irrigazione — ma l'acqua è uscita davvero,
+        e un bilancio che non la conta comincia a mentire proprio nel
+        momento in cui gli si sta insegnando a dire il vero. Si usa la
+        portata appena misurata, se il conto si chiude; altrimenti quella
+        che la linea aveva.
+        """
+        params = resolve_zone_params(zone, self._store.system)
+        area = zone_area_m2(zone)
+        l_h = esito.get("l_h")
+        mm_h = rate_from_flow(l_h, area) if (area and l_h) else params.rate_mm_h
+        if mm_h <= 0:
+            return
+
+        applicati = mm_h * (CALIBRATION_RUN_S / 3600.0) * params.efficiency
+        deficit = max(0.0, float(zone.get("deficit_mm") or 0.0) - applicati)
+        self._store.async_set_deficit(zone["id"], deficit)
+        esito["mm_erogati"] = round(applicati, 2)
+
+    async def _open_with_confirm(self, valve: str, nome: str) -> bool:
+        """Apertura verificata, con gli stessi tentativi dell'irrigazione."""
+        for tentativo in range(1, VALVE_RETRIES + 2):
+            if await self._open_confirmed(valve):
+                return True
+            _LOGGER.warning(
+                "Taratura di %s: valvola non confermata al tentativo %d",
+                nome,
+                tentativo,
+            )
+            await self._close(valve)
+            await asyncio.sleep(VALVE_RETRY_PAUSE_S)
+        return False
 
     async def async_stop(self) -> None:
         """Ferma tutto e chiude la valvola in corso."""
