@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.8.2] - 2026-07-30
+
 ### Corretto
 - **«Avvia irrigazione ora» sembrava un pulsante rotto.** La sequenza
   irriga soltanto le linee sotto soglia, e quando non ce n'è nessuna non
