@@ -264,6 +264,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
     clearTimeout(this._softTimer);
     clearInterval(this._waitTimer);
     clearTimeout(this._restartTimer);
+    clearTimeout(this._noticeTimer);
     if (this._resizeObs) this._resizeObs.disconnect();
   }
 
@@ -391,6 +392,85 @@ class IrrigazioneSmartPanel extends HTMLElement {
     } finally {
       this._render();
     }
+  }
+
+  /* Avvio manuale della sequenza.
+
+     La sequenza irriga le linee che stanno sotto soglia, e quando non ce
+     n'è nessuna non parte niente: è il comportamento giusto — irrigare
+     un terreno che non ha sete è il modo di tenere le radici in
+     superficie — ma lasciava la pagina esattamente com'era, e il
+     pulsante sembrava non funzionare. Se non è partita si dice perché,
+     coi motivi veri delle linee. */
+  async _avviaSequenza(categoria) {
+    this._setNotice(null);
+    try {
+      const res = await this._api("POST", "run", categoria ? { categoria } : {});
+      if (res && res.overview) this._overview = res.overview;
+      this._error = null;
+      // `avviata` manca sulle versioni vecchie del server: in quel caso
+      // si tace, invece di dare per scontato che non sia partita
+      if (res && res.avviata === false) {
+        this._setNotice(this._motivoNienteDaIrrigare(categoria));
+      }
+    } catch (err) {
+      this._error = (err && err.message) || String(err);
+    } finally {
+      this._render();
+    }
+  }
+
+  /* Perché il comando non ha fatto partire niente.
+
+     I motivi arrivano dal motore, linea per linea: dirne uno generico
+     («nessuna linea da irrigare») lascerebbe l'utente a chiedersi se sia
+     il vento, la soglia o un interruttore spento. */
+  _motivoNienteDaIrrigare(categoria) {
+    if ((this._overview.running || {}).active) {
+      return "C'è già un'irrigazione in corso: il comando è stato ignorato.";
+    }
+
+    const zones = (this._overview.zones || []).filter(
+      (z) => !categoria || (z.category || "altro") === categoria
+    );
+    if (!zones.length) return "Non c'è nessuna linea in questo gruppo.";
+
+    const spente = zones.filter((z) => !z.enabled).length;
+    const attive = zones.filter((z) => z.enabled);
+    if (!attive.length) {
+      return spente === 1
+        ? "L'unica linea è disattivata: accendila per poterla irrigare."
+        : `Tutte le ${spente} linee sono disattivate: accendine una per irrigarla.`;
+    }
+
+    const conteggio = new Map();
+    attive.forEach((z) => {
+      const motivo = ((z.computed || {}).plan || {}).reason;
+      const testo = reasonLabel(motivo) || "sotto soglia";
+      conteggio.set(testo, (conteggio.get(testo) || 0) + 1);
+    });
+    const dettaglio = [...conteggio.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([testo, n]) => `${n} ${testo}`)
+      .join(", ");
+
+    return (
+      `Nessuna linea da irrigare adesso: ${dettaglio}` +
+      (spente ? `, ${spente} disattivat${spente === 1 ? "a" : "e"}` : "") +
+      ". Per bagnarne una lo stesso, usa il pulsante ▶ accanto al suo nome."
+    );
+  }
+
+  /* L'avviso si toglie da solo: è la risposta a un clic, non uno stato
+     della pagina, e restare lì per sempre lo trasformerebbe in rumore. */
+  _setNotice(testo) {
+    clearTimeout(this._noticeTimer);
+    this._notice = testo;
+    if (!testo) return;
+    this._noticeTimer = setTimeout(() => {
+      this._notice = null;
+      this._render();
+    }, 12000);
   }
 
   /* Salvataggio senza ridisegnare subito.
@@ -707,6 +787,8 @@ class IrrigazioneSmartPanel extends HTMLElement {
 
     onClick(".tab", (e) => {
       this._tab = e.currentTarget.getAttribute("data-tab");
+      // l'avviso riguardava il comando dato nella scheda di prima
+      this._setNotice(null);
       this._render();
     });
     this._startWaitTicker();
@@ -740,11 +822,9 @@ class IrrigazioneSmartPanel extends HTMLElement {
       if (legenda) legenda.style.display = mostrata ? "none" : "";
     });
     onClick(".retry", () => this._fetchOverview());
-    onClick(".run-all", () => this._mutate("POST", "run", {}));
+    onClick(".run-all", () => this._avviaSequenza(null));
     onClick(".run-group", (e) =>
-      this._mutate("POST", "run", {
-        categoria: e.currentTarget.getAttribute("data-cat"),
-      })
+      this._avviaSequenza(e.currentTarget.getAttribute("data-cat"))
     );
     onClick(".edit-group", () => this._openGroupDialog(this._tab.slice(2)));
     onClick(".day-chip", (e) => {
@@ -1103,7 +1183,10 @@ class IrrigazioneSmartPanel extends HTMLElement {
 
     const err =
       this._staleBackend() +
-      (this._error ? `<ha-alert alert-type="error">${esc(this._error)}</ha-alert>` : "");
+      (this._error ? `<ha-alert alert-type="error">${esc(this._error)}</ha-alert>` : "") +
+      (this._notice
+        ? `<ha-alert alert-type="info">${esc(this._notice)}</ha-alert>`
+        : "");
 
     if (this._tab.startsWith("g:")) return err + this._groupTab(this._tab.slice(2));
     if (this._tab === "mappa") return err + this._mapTab();
@@ -3189,7 +3272,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
       this._selVertex = null;
       this._repaintMap();
     });
-    on(".run-all", () => this._mutate("POST", "run", {}));
+    on(".run-all", () => this._avviaSequenza(null));
     on(".stop-all", () => this._mutate("POST", "stop", {}));
 
     const file = tab.querySelector(".map-file");

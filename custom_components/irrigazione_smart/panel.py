@@ -938,12 +938,19 @@ class RunView(HomeAssistantView):
             if not zone.get("enabled"):
                 return self.json_message("La linea è disattivata", 400)
             await executor.async_run_zone(zone_id, payload.get("minuti"))
+            avviata = True
         else:
             # `categoria` limita la sequenza a un gruppo: solo il prato,
             # solo le aiuole
-            await executor.async_start_sequence(category=payload.get("categoria"))
+            avviata = await executor.async_start_sequence(
+                category=payload.get("categoria")
+            )
 
-        return self.json({"overview": _build_overview(hass)})
+        # Se non è partita niente lo si dice: la sequenza irriga solo le
+        # linee sotto soglia, e quando non ce n'è nessuna il comando non
+        # ha nulla da fare. Senza questa riga la pagina restava identica e
+        # il pulsante sembrava rotto.
+        return self.json({"avviata": bool(avviata), "overview": _build_overview(hass)})
 
 
 class StopView(HomeAssistantView):

@@ -8,6 +8,23 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Corretto
+- **«Avvia irrigazione ora» sembrava un pulsante rotto.** La sequenza
+  irriga soltanto le linee sotto soglia, e quando non ce n'è nessuna non
+  parte niente — è il comportamento giusto, perché bagnare un terreno che
+  non ha sete tiene le radici in superficie. Il guaio era che la pagina
+  restava identica: nessun messaggio, nessuna riga nel registro, niente.
+  Ora il comando dice cosa ha trovato, coi motivi veri linea per linea:
+  *«Nessuna linea da irrigare adesso: 3 sotto soglia, 1 vento eccessivo,
+  2 disattivate»*, e ricorda che per bagnarne una lo stesso c'è il
+  pulsante ▶ accanto al suo nome
+  - Vale anche per *Avvia ora* di un gruppo e per *Irriga tutte le aree*
+    sulla mappa
+  - Se le linee del gruppo sono tutte spente lo dice apertamente, invece
+    di parlare di soglie
+  - L'avviso si toglie da solo dopo qualche secondo: è la risposta a un
+    clic, non uno stato della pagina
+
 ## [1.8.1] - 2026-07-29
 
 ### Corretto
