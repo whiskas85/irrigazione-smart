@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-07-30
+
 ### Aggiunto
 - **Taratura della portata col flussostato.** Un litro steso su un metro
   quadro è alto un millimetro: se un contatore dice quanti litri passano,
