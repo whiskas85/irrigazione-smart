@@ -857,13 +857,9 @@ class IrrigazioneSmartPanel extends HTMLElement {
     onClick(".run-group", (e) =>
       this._avviaSequenza(e.currentTarget.getAttribute("data-cat"))
     );
-    onClick(".mode-card", (e) => {
-      const mode = e.currentTarget.getAttribute("data-mode");
-      if ((this._overview.system || {}).mode === mode) return;
-      this._overview.system.mode = mode;
-      this._mutateQuiet("POST", "system", { mode });
-      this._render();
-    });
+    onClick(".mode-card, .mode-switch", (e) =>
+      this._cambiaModalita(e.currentTarget.getAttribute("data-mode"))
+    );
     onClick(".go-program", () => {
       this._tab = "programma";
       this._setNotice(null);
@@ -1769,6 +1765,35 @@ class IrrigazioneSmartPanel extends HTMLElement {
       (programmato ? this._programGantt() : this._programAuto());
   }
 
+  /* Cambia chi decide, senza passare dalle impostazioni.
+
+     È l'interruttore che riguarda proprio questa pagina — quale delle
+     due facce ha senso guardare — quindi sta qui e agisce subito.
+     Passare al manuale con un Gantt vuoto però ferma l'acqua del tutto:
+     va detto nell'istante in cui succede, non lasciato scoprire domani
+     mattina dal prato. */
+  _cambiaModalita(mode) {
+    const sys = this._overview.system || {};
+    if (!mode || sys.mode === mode) return;
+
+    sys.mode = mode;
+    if (mode === "programmato") {
+      const { bars } = this._program();
+      this._setNotice(
+        bars.length
+          ? "Da adesso comanda il programma: il bilancio idrico continua a misurare il terreno, ma non fa più partire niente."
+          : "Da adesso comanda il programma, e il programma è vuoto: finché non disegni un'accensione non esce acqua."
+      );
+    } else {
+      this._setNotice(
+        "Da adesso decide il bilancio idrico: si irriga quando il terreno scende sotto soglia, negli orari qui sotto."
+      );
+    }
+
+    this._mutateQuiet("POST", "system", { mode });
+    this._render();
+  }
+
   _programHeader(programmato) {
     return `<ha-card><div class="inner">
       <div class="master-row">
@@ -1785,7 +1810,12 @@ class IrrigazioneSmartPanel extends HTMLElement {
               : "qui si stabilisce soltanto quando è permesso irrigare: quanta acqua serve lo calcola il sistema"
           }</span>
         </div>
-        ${this._button("go-settings", "Cambia")}
+        <button type="button" class="btn primary mode-switch"
+                data-mode="${programmato ? "automatico" : "programmato"}">${
+          programmato
+            ? "Torna all'automatica"
+            : "Passa alla programmazione manuale"
+        }</button>
       </div>
     </div></ha-card>`;
   }

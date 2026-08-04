@@ -8,6 +8,17 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Modificato
+- **Il pulsante della modalità cambia la modalità, invece di mandarti
+  altrove.** In cima alla Programmazione diceva *Cambia* e portava alle
+  impostazioni, dove bisognava cercare la scheda giusta e premere di
+  nuovo. Adesso dice cosa farà — *Passa alla programmazione manuale*,
+  *Torna all'automatica* — e lo fa lì, restando sulla pagina che si sta
+  guardando
+  - Passando al manuale con un Gantt vuoto lo dice subito: *«finché non
+    disegni un'accensione non esce acqua»*. È il momento giusto per
+    saperlo, non domani mattina guardando il prato
+
 ## [1.13.0] - 2026-08-04
 
 ### Aggiunto
