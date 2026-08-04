@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.13.1] - 2026-08-05
+
 ### Modificato
 - **Il pulsante della modalità cambia la modalità, invece di mandarti
   altrove.** In cima alla Programmazione diceva *Cambia* e portava alle
