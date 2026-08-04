@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.11.1] - 2026-08-04
+
 ### Modificato
 - **Il *quando* ha una pagina sua.** La scheda **Programmazione** c'è
   sempre, in tutte e due le modalità, e tiene tutto ciò che riguarda gli
