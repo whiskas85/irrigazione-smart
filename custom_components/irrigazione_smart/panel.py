@@ -236,6 +236,8 @@ def _build_overview(hass: HomeAssistant) -> dict[str, Any]:
         "map": _map_payload(store),
         # esito dell'ultima taratura, per riproporlo alla riapertura
         "calibration": store.calibration,
+        # il programma manuale: barre del Gantt e giorni in cui vale
+        "program": store.program,
         "running": executor.status() if executor else {"active": False},
         "flow": _flow_payload(hass, system),
         "schedule": _schedule_payload(plans, window, system),
@@ -977,6 +979,26 @@ class StopView(HomeAssistantView):
         return self.json({"overview": _build_overview(hass)})
 
 
+class ProgramView(HomeAssistantView):
+    """Il programma manuale disegnato col Gantt."""
+
+    url = "/api/irrigazione_smart/program"
+    name = "api:irrigazione_smart:program"
+    requires_auth = True
+
+    async def post(self, request):
+        _require_admin(request)
+        hass: HomeAssistant = request.app["hass"]
+        store = _get_store(hass)
+        if store is None:
+            return self.json_message("Integration non configurata", 400)
+
+        payload = await request.json()
+        store.async_save_program(payload)
+        _notify(hass)
+        return self.json({"overview": _build_overview(hass)})
+
+
 class CalibrationView(HomeAssistantView):
     """Taratura: misura la portata reale, linea per linea."""
 
@@ -1151,6 +1173,7 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
         hass.http.register_view(ItemDetailView())
         hass.http.register_view(RunView())
         hass.http.register_view(StopView())
+        hass.http.register_view(ProgramView())
         hass.http.register_view(CalibrationView())
         hass.http.register_view(CalibrationApplyView())
         domain_data[_HTTP_FLAG] = True

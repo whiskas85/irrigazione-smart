@@ -19,8 +19,8 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
-from .activity_log import get_log
-from .const import CATEGORY_LABELS, CATEGORY_ORDER, DOMAIN
+from .activity_log import WARNING, get_log
+from .const import CATEGORY_LABELS, CATEGORY_ORDER, DOMAIN, FROST_LIMIT_C
 from .executor import get_executor
 from .hydro import TimeWindow
 from .store import WEEKDAYS, IrrigazioneStore
@@ -58,6 +58,9 @@ class IrrigationScheduler:
     def __init__(self, hass: HomeAssistant, store: IrrigazioneStore) -> None:
         self._hass = hass
         self._store = store
+        # ultimo motivo di sospensione già scritto nel registro: senza,
+        # una giornata di pioggia riempirebbe il log di righe identiche
+        self._blocked_note: str | None = None
 
     def next_run(self, category: str) -> dict[str, Any]:
         """Quando partirà il gruppo, e perché eventualmente non partirà."""
@@ -123,10 +126,103 @@ class IrrigationScheduler:
         """Avvia il controllo periodico. Ritorna la funzione di rimozione."""
         return async_track_time_interval(self._hass, self._tick, CHECK_INTERVAL)
 
+    # ------------------------------------------------------- programmato
+
+    def _program_desired(self, now) -> tuple[set[str], list[dict[str, Any]]]:
+        """Quali linee devono avere la valvola aperta in questo istante.
+
+        Non si tiene traccia di cosa è già partito: si guarda l'orologio e
+        si dice cosa dovrebbe essere aperto adesso. Un riavvio a metà
+        programma non perde niente, e due barre sovrapposte diventano due
+        valvole aperte senza che nessuno debba orchestrarle.
+        """
+        program = self._store.program
+        if WEEKDAYS[now.weekday()] not in (program.get("days") or []):
+            return set(), []
+
+        minuti = now.hour * 60 + now.minute
+        attive = [
+            barra
+            for barra in program.get("bars") or []
+            if barra["start_min"] <= minuti < barra["start_min"] + barra["minutes"]
+        ]
+        zone_ids = set()
+        for barra in attive:
+            zone = self._store.zones.get(barra["zone_id"])
+            if zone and zone.get("enabled", True) and zone.get("valve_entity"):
+                zone_ids.add(barra["zone_id"])
+        return zone_ids, attive
+
+    def _program_blocked(self) -> str | None:
+        """Motivo per cui il meteo ferma il programma, se lo ferma."""
+        if not self._store.system.get("program_guards", True):
+            return None
+
+        coordinator = self._hass.data.get(DOMAIN, {}).get("coordinator")
+        data = (coordinator.data if coordinator else None) or {}
+        system = self._store.system
+
+        pioggia = float(data.get("rain_forecast_mm") or 0.0)
+        soglia_pioggia = float(system.get("rain_forecast_max_mm") or 0.0)
+        if soglia_pioggia and pioggia > soglia_pioggia:
+            return f"pioggia prevista {pioggia:.1f} mm"
+
+        vento = float(data.get("wind_kmh") or 0.0)
+        soglia_vento = float(system.get("wind_max_kmh") or 0.0)
+        if soglia_vento and vento > soglia_vento:
+            return f"vento {vento:.0f} km/h"
+
+        # Il gelo si guarda adesso, non sulla minima della notte: alle due
+        # del pomeriggio una minima di zero è storia, e bloccherebbe
+        # un'irrigazione che non ha nulla da temere.
+        temperatura = (data.get("live") or {}).get("temperature")
+        if temperatura is not None and float(temperatura) <= FROST_LIMIT_C:
+            return "rischio gelo"
+        return None
+
+    async def _run_program(self, now) -> None:
+        """Allinea le valvole a quello che il programma prevede adesso."""
+        executor = get_executor(self._hass)
+        if executor is None:
+            return
+
+        program = self._store.program
+        governate = {
+            barra["zone_id"]
+            for barra in program.get("bars") or []
+            if barra.get("zone_id") in self._store.zones
+        }
+        if not governate:
+            return
+
+        volute: set[str] = set()
+        if self._store.system.get("master_enabled", True):
+            motivo = self._program_blocked()
+            if motivo is None:
+                volute, _attive = self._program_desired(now)
+            elif self._blocked_note != motivo:
+                self._blocked_note = motivo
+                activity = get_log(self._hass)
+                if activity is not None:
+                    activity.add(
+                        "config", f"Programma sospeso: {motivo}", level=WARNING
+                    )
+        if volute:
+            self._blocked_note = None
+
+        await executor.async_apply_program(governate, volute)
+
     async def _tick(self, _now) -> None:
         executor = get_executor(self._hass)
         if executor is None or executor.running:
             return
+
+        # In modalità programmata comanda il Gantt: il bilancio idrico
+        # continua a girare, ma non fa più partire niente da sé.
+        if self._store.system.get("mode") == "programmato":
+            await self._run_program(dt_util.now())
+            return
+
         if not self._store.system.get("master_enabled", True):
             return
 

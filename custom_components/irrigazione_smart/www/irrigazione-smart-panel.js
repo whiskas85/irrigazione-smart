@@ -39,7 +39,22 @@ const TAIL_TABS = [
   { id: "meteo", label: "Meteo", icon: "mdi:weather-partly-cloudy" },
   { id: "azioni", label: "Azioni", icon: "mdi:bell-cog-outline" },
   { id: "log", label: "Log", icon: "mdi:format-list-bulleted" },
+  { id: "impostazioni", label: "Impostazioni", icon: "mdi:cog-outline" },
 ];
+
+/* La scheda del programma manuale compare solo quando comanda lui: in
+   automatico sarebbe un Gantt che non fa succedere niente. */
+const PROGRAM_TAB = {
+  id: "programma",
+  label: "Programma",
+  icon: "mdi:chart-timeline",
+};
+
+/* Passo di trascinamento del Gantt. Cinque minuti sono la risoluzione
+   con cui si ragiona su un'irrigazione: al minuto si litigherebbe col
+   pixel senza guadagnare un filo d'erba. */
+const GANTT_STEP_MIN = 5;
+const GIORNO_MIN = 24 * 60;
 
 const DAY_LABELS = {
   mon: "Lun", tue: "Mar", wed: "Mer", thu: "Gio",
@@ -654,7 +669,15 @@ class IrrigazioneSmartPanel extends HTMLElement {
         icon: icons[key] || "mdi:sprinkler-variant",
       }));
 
-    return [...BASE_TABS, ...groupTabs, ...TAIL_TABS];
+    const programmato =
+      ((this._overview && this._overview.system) || {}).mode === "programmato";
+
+    return [
+      ...BASE_TABS,
+      ...(programmato ? [PROGRAM_TAB] : []),
+      ...groupTabs,
+      ...TAIL_TABS,
+    ];
   }
 
   // ------------------------------------------------------------- render
@@ -800,6 +823,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
       this._bindMap();
       this._renderCards();
     }
+    if (this._tab === "programma") this._bindProgram();
     onClick(".add-zone", () => this._openZoneDialog(null));
     onClick(".edit-zone", (e) =>
       this._openZoneDialog(e.currentTarget.getAttribute("data-id"))
@@ -830,7 +854,18 @@ class IrrigazioneSmartPanel extends HTMLElement {
     onClick(".run-group", (e) =>
       this._avviaSequenza(e.currentTarget.getAttribute("data-cat"))
     );
-    onClick(".calibrate-open", () =>
+    onClick(".mode-card", (e) => {
+      const mode = e.currentTarget.getAttribute("data-mode");
+      if ((this._overview.system || {}).mode === mode) return;
+      this._overview.system.mode = mode;
+      this._mutateQuiet("POST", "system", { mode });
+      this._render();
+    });
+    onClick(".go-program", () => {
+      this._tab = "programma";
+      this._render();
+    });
+    onClick(".calibrate-open", (e) =>
       this._openCalibrationDialog(this._tab.slice(2))
     );
     onClick(".calibrate-apply", () => this._applyCalibration());
@@ -1196,12 +1231,502 @@ class IrrigazioneSmartPanel extends HTMLElement {
         ? `<ha-alert alert-type="info">${esc(this._notice)}</ha-alert>`
         : "");
 
+    if (this._tab === "programma") return err + this._programTab();
+    if (this._tab === "impostazioni") return err + this._settingsTab();
     if (this._tab.startsWith("g:")) return err + this._groupTab(this._tab.slice(2));
     if (this._tab === "mappa") return err + this._mapTab();
     if (this._tab === "meteo") return err + this._meteoTab();
     if (this._tab === "log") return err + this._logTab();
     if (this._tab === "azioni") return err + this._actionsTab();
     return err + this._dashboardTab();
+  }
+
+  /* ---------------------------------------------------------------------
+     IMPOSTAZIONI
+
+     Una pagina sola per tutto ciò che vale per l'impianto intero. Prima
+     erano sparse fra una scheda della dashboard e due dialoghi, e la
+     prima domanda di chiunque era «dove si cambia».
+     --------------------------------------------------------------------- */
+
+  _settingsTab() {
+    const sys = this._overview.system || {};
+    const programmato = sys.mode === "programmato";
+    const zones = this._overview.zones || [];
+    const { bars, days } = this._program();
+
+    return `
+      <ha-card><div class="inner">
+        <div class="card-head">
+          <ha-icon icon="mdi:brain"></ha-icon>
+          <h2>Chi decide quando irrigare</h2>
+        </div>
+        <div class="mode-choice">
+          <button type="button" class="mode-card${programmato ? "" : " on"}"
+                  data-mode="automatico">
+            <ha-icon icon="mdi:water-percent"></ha-icon>
+            <span class="mode-title">Automatica</span>
+            <span class="mode-sub">
+              Decide il bilancio idrico: si irriga quando il terreno è sceso
+              sotto soglia, per il tempo che serve a rimetterlo a posto.
+              Orari e giorni dicono solo <i>quando è permesso</i>.
+            </span>
+          </button>
+          <button type="button" class="mode-card${programmato ? " on" : ""}"
+                  data-mode="programmato">
+            <ha-icon icon="mdi:chart-timeline"></ha-icon>
+            <span class="mode-title">Programmata</span>
+            <span class="mode-sub">
+              Decidi tu, col Gantt: orari e durate fissi, anche più linee
+              insieme. Il bilancio continua a misurare il terreno, ma non
+              comanda più l'acqua.
+            </span>
+          </button>
+        </div>
+        ${
+          programmato
+            ? `<div class="row">
+                 <ha-icon icon="mdi:chart-timeline"></ha-icon>
+                 <div class="row-main">
+                   <span class="row-label">Programma attivo</span>
+                   <span class="sub">${bars.length} accensioni su ${
+                     days.length
+                   } giorni · ${zones.length} linee disponibili</span>
+                 </div>
+                 ${this._button("go-program", "Apri il Gantt")}
+               </div>
+               <div class="row">
+                 <ha-icon icon="mdi:weather-pouring"></ha-icon>
+                 <div class="row-main">
+                   <span class="row-label">Blocchi meteo sul programma</span>
+                   <span class="sub">
+                     salta l'accensione se piove, se ha appena piovuto, col
+                     vento oltre soglia o col gelo
+                   </span>
+                 </div>
+                 <ha-switch data-flag="program_guards" ${
+                   sys.program_guards !== false ? "checked" : ""
+                 }></ha-switch>
+               </div>`
+            : ""
+        }
+      </div></ha-card>
+
+      ${this._systemCard(sys)}
+      ${this._sensorsCard(sys)}
+      ${this._locationCard(sys)}`;
+  }
+
+  /* Comandi della scheda programma: giorni, campi della barra, Gantt. */
+  _bindProgram() {
+    const sr = this.shadowRoot;
+
+    sr.querySelectorAll(".prog-day").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        const giorno = chip.getAttribute("data-day");
+        const { days, bars } = this._program();
+        const nuovi = days.includes(giorno)
+          ? days.filter((d) => d !== giorno)
+          : [...days, giorno];
+        this._salvaProgramma({ days: nuovi, bars });
+      });
+    });
+
+    const start = sr.querySelector(".bar-start");
+    const minuti = sr.querySelector(".bar-min");
+    const applica = () => {
+      const { days, bars } = this._program();
+      const barra = bars.find((b) => b.id === this._selBar);
+      if (!barra) return;
+      const [h, m] = (start.value || "00:00").split(":").map(Number);
+      this._salvaProgramma({
+        days,
+        bars: bars.map((b) =>
+          b.id === barra.id
+            ? {
+                ...b,
+                start_min: Math.max(0, Math.min(GIORNO_MIN - 1, h * 60 + m)),
+                minutes: Math.max(1, Number(minuti.value) || 1),
+              }
+            : b
+        ),
+      });
+    };
+    if (start) start.addEventListener("change", applica);
+    if (minuti) minuti.addEventListener("change", applica);
+
+    const elimina = sr.querySelector(".bar-del");
+    if (elimina) {
+      elimina.addEventListener("click", () => {
+        const { days, bars } = this._program();
+        const resto = bars.filter((b) => b.id !== this._selBar);
+        this._selBar = null;
+        this._salvaProgramma({ days, bars: resto });
+      });
+    }
+
+    this._bindGantt();
+  }
+
+  /* Trascinamento delle barre.
+
+     Si lavora sui minuti e non sui pixel: la traccia può essere larga
+     350 punti su un telefono e 900 su un desktop, ma cinque minuti sono
+     cinque minuti. Il salvataggio avviene al rilascio, non durante: una
+     POST per ogni pixel percorso riempirebbe il disco di versioni. */
+  _bindGantt() {
+    const sr = this.shadowRoot;
+    const gantt = sr.querySelector(".gantt");
+    if (!gantt) return;
+
+    const minutiDaX = (track, clientX) => {
+      const box = track.getBoundingClientRect();
+      const frazione = (clientX - box.left) / (box.width || 1);
+      return Math.max(0, Math.min(GIORNO_MIN, frazione * GIORNO_MIN));
+    };
+    const scatto = (m) => Math.round(m / GANTT_STEP_MIN) * GANTT_STEP_MIN;
+
+    // nuova accensione toccando una riga vuota
+    sr.querySelectorAll(".gantt-track[data-track]").forEach((track) => {
+      track.addEventListener("pointerdown", (ev) => {
+        if (ev.target.closest(".gantt-bar")) return;
+        const inizio = Math.min(
+          GIORNO_MIN - 15,
+          scatto(minutiDaX(track, ev.clientX))
+        );
+        const { days, bars } = this._program();
+        const nuova = {
+          id: `b${Date.now().toString(36)}`,
+          zone_id: track.getAttribute("data-track"),
+          start_min: inizio,
+          minutes: 15,
+        };
+        this._selBar = nuova.id;
+        this._salvaProgramma({ days, bars: [...bars, nuova] });
+      });
+    });
+
+    sr.querySelectorAll(".gantt-bar[data-bar]").forEach((el) => {
+      el.addEventListener("pointerdown", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const id = el.getAttribute("data-bar");
+        const track = el.parentElement;
+        const { days, bars } = this._program();
+        const barra = bars.find((b) => b.id === id);
+        if (!barra) return;
+
+        const allunga = !!ev.target.closest(".gantt-grip");
+        const partenza = minutiDaX(track, ev.clientX);
+        const inizio0 = barra.start_min;
+        const durata0 = barra.minutes;
+        let mosso = false;
+        let inizio = inizio0;
+        let durata = durata0;
+
+        el.setPointerCapture(ev.pointerId);
+        const testo = el.querySelector(".gantt-bar-text");
+
+        const muovi = (e) => {
+          const delta = minutiDaX(track, e.clientX) - partenza;
+          if (Math.abs(delta) >= 1) mosso = true;
+          if (allunga) {
+            durata = Math.max(
+              GANTT_STEP_MIN,
+              Math.min(scatto(durata0 + delta), GIORNO_MIN - inizio0)
+            );
+          } else {
+            inizio = Math.max(
+              0,
+              Math.min(scatto(inizio0 + delta), GIORNO_MIN - durata0)
+            );
+          }
+          el.style.left = `${(inizio / GIORNO_MIN) * 100}%`;
+          el.style.width = `${(durata / GIORNO_MIN) * 100}%`;
+          if (testo) testo.textContent = `${this._hhmm(inizio)} · ${durata}′`;
+        };
+
+        const molla = () => {
+          el.removeEventListener("pointermove", muovi);
+          el.removeEventListener("pointerup", molla);
+          el.removeEventListener("pointercancel", molla);
+          this._selBar = id;
+          if (!mosso) {
+            // solo un tocco: si voleva selezionarla, non spostarla
+            this._render();
+            return;
+          }
+          this._salvaProgramma({
+            days,
+            bars: bars.map((b) =>
+              b.id === id ? { ...b, start_min: inizio, minutes: durata } : b
+            ),
+          });
+        };
+
+        el.addEventListener("pointermove", muovi);
+        el.addEventListener("pointerup", molla);
+        el.addEventListener("pointercancel", molla);
+      });
+    });
+  }
+
+  /* Salva il programma e ridisegna. Lo stato locale si aggiorna subito:
+     aspettare il giro di rete farebbe tornare indietro la barra appena
+     rilasciata, e sembrerebbe che il trascinamento non abbia preso. */
+  async _salvaProgramma(program) {
+    this._overview.program = {
+      days: program.days,
+      bars: [...program.bars].sort((a, b) => a.start_min - b.start_min),
+    };
+    this._render();
+    await this._mutate("POST", "program", program);
+  }
+
+  /* ---------------------------------------------------------------------
+     PROGRAMMA MANUALE
+
+     Un Gantt vero: una riga per linea, la giornata in orizzontale, una
+     barra per ogni accensione. Si trascina per spostarla, si tira dal
+     bordo destro per allungarla.
+
+     Le barre sovrapposte sono la ragione per cui questa pagina è un
+     disegno e non una tabella: due linee che aprono insieme si vedono a
+     colpo d'occhio, e in una tabella di orari no. Chi le sovrappone sa
+     cosa sta facendo — l'impianto ha una pressione sola — quindi il
+     software conta le sovrapposizioni e lo scrive, senza impedirlo.
+     --------------------------------------------------------------------- */
+
+  _program() {
+    const p = (this._overview && this._overview.program) || {};
+    return { days: p.days || [], bars: p.bars || [] };
+  }
+
+  /* Linee che possono comparire nel programma: serve la valvola. */
+  _programZones() {
+    return (this._overview.zones || []).filter((z) => z.valve_entity);
+  }
+
+  _hhmm(minuti) {
+    const m = ((Math.round(minuti) % GIORNO_MIN) + GIORNO_MIN) % GIORNO_MIN;
+    return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+  }
+
+  /* Quante linee aprono insieme nel momento peggiore della giornata. */
+  _maxSovrapposte(bars) {
+    const eventi = [];
+    bars.forEach((b) => {
+      eventi.push([b.start_min, 1], [b.start_min + b.minutes, -1]);
+    });
+    eventi.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    let attuale = 0;
+    let massimo = 0;
+    eventi.forEach(([, delta]) => {
+      attuale += delta;
+      massimo = Math.max(massimo, attuale);
+    });
+    return massimo;
+  }
+
+  /* Cosa farà il programma oggi, sulla dashboard.
+
+     In modalità programmata la sequenza calcolata dal bilancio non
+     descrive più niente di ciò che succederà: al suo posto va il
+     programma vero, con gli orari che l'utente ha disegnato. */
+  _todayProgramCard() {
+    const { days, bars } = this._program();
+    const zones = this._overview.zones || [];
+    const oggi = DAY_ORDER[(new Date().getDay() + 6) % 7];
+    const attivo = days.includes(oggi);
+
+    const righe = bars
+      .map((b) => {
+        const z = zones.find((x) => x.id === b.zone_id);
+        if (!z) return "";
+        return `<div class="row">
+          <span class="log-time">${this._hhmm(b.start_min)}</span>
+          <div class="row-main"><span class="row-label">${esc(z.name)}</span></div>
+          <span class="reading small">${this._hhmm(b.start_min)}–${this._hhmm(
+            b.start_min + b.minutes
+          )}</span>
+          <span class="badge run">${b.minutes} min</span>
+        </div>`;
+      })
+      .join("");
+
+    return `<ha-card><div class="inner">
+      <div class="card-head">
+        <ha-icon icon="mdi:chart-timeline"></ha-icon>
+        <h2>Programma di oggi</h2>
+        <span class="spacer"></span>
+        ${this._button("go-program", "Modifica")}
+      </div>
+      ${
+        !bars.length
+          ? `<div class="empty-state">
+               <ha-icon icon="mdi:chart-timeline"></ha-icon>
+               <p>Il programma è vuoto.</p>
+               <p class="muted small">In modalità programmata l'acqua esce
+                 solo dove l'hai disegnata: finché il Gantt è vuoto, non
+                 irriga niente.</p>
+             </div>`
+          : attivo
+          ? righe
+          : `<p class="muted small nomargin">Oggi non è un giorno del
+               programma: la prossima accensione è nel primo giorno attivo.</p>
+             ${righe}`
+      }
+    </div></ha-card>`;
+  }
+
+  _programTab() {
+    const zones = this._programZones();
+    if (!zones.length) {
+      return `<ha-card><div class="inner"><div class="empty-state">
+        <ha-icon icon="mdi:chart-timeline"></ha-icon>
+        <p>Nessuna linea ha una valvola.</p>
+        <p class="muted small">Il programma accende valvole: senza, non c'è
+          niente da mettere sul calendario.</p>
+      </div></div></ha-card>`;
+    }
+
+    const { days, bars } = this._program();
+    const totale = bars.reduce((s, b) => s + b.minutes, 0);
+    const insieme = this._maxSovrapposte(bars);
+
+    const chips = DAY_ORDER.map(
+      (d) => `<button type="button" class="day-chip prog-day${
+        days.includes(d) ? " on" : ""
+      }" data-day="${d}">${DAY_LABELS[d]}</button>`
+    ).join("");
+
+    return `
+      <ha-card><div class="inner">
+        <div class="card-head">
+          <ha-icon icon="mdi:chart-timeline"></ha-icon>
+          <h2>Programma</h2>
+          <span class="spacer"></span>
+          <span class="sub">${bars.length} ${
+            bars.length === 1 ? "accensione" : "accensioni"
+          } · ${totale} min d'acqua</span>
+        </div>
+        <p class="muted small nomargin">
+          Tocca una riga vuota per aggiungere un'accensione, trascina la
+          barra per spostarla, tirala dal bordo destro per allungarla.
+          Due barre sovrapposte sono due linee aperte insieme.
+        </p>
+        ${
+          insieme > 1
+            ? `<ha-alert alert-type="warning">
+                 In un punto della giornata ci sono <b>${insieme} linee aperte
+                 insieme</b>: la portata si divide fra loro e gli irrigatori
+                 perdono gittata. Fallo solo se l'impianto regge la somma
+                 delle loro portate.
+               </ha-alert>`
+            : ""
+        }
+        ${this._ganttHtml(zones, bars)}
+        <div class="days-row">
+          <span class="fld-label">Giorni in cui il programma vale</span>
+          <div class="day-chips">${chips}</div>
+        </div>
+      </div></ha-card>
+      ${this._barEditor(zones, bars)}`;
+  }
+
+  _ganttHtml(zones, bars) {
+    const ore = [];
+    for (let h = 0; h <= 24; h += 2) {
+      ore.push(
+        `<span class="gantt-tick" style="left:${(h / 24) * 100}%">${String(h).padStart(2, "0")}</span>`
+      );
+    }
+
+    const righe = zones
+      .map((z) => {
+        const mie = bars.filter((b) => b.zone_id === z.id);
+        const barre = mie
+          .map((b) => {
+            const sel = this._selBar === b.id ? " selected" : "";
+            return `<div class="gantt-bar${sel}" data-bar="${esc(b.id)}"
+                      style="left:${(b.start_min / GIORNO_MIN) * 100}%;
+                             width:${(b.minutes / GIORNO_MIN) * 100}%">
+                      <span class="gantt-bar-text">${this._hhmm(b.start_min)} · ${b.minutes}′</span>
+                      <span class="gantt-grip" data-grip="${esc(b.id)}"></span>
+                    </div>`;
+          })
+          .join("");
+        return `<div class="gantt-row">
+          <span class="gantt-name" title="${esc(z.name)}">${esc(z.name)}</span>
+          <div class="gantt-track" data-track="${esc(z.id)}">
+            <div class="gantt-grid"></div>
+            ${barre}
+          </div>
+        </div>`;
+      })
+      .join("");
+
+    // La giornata intera in trecento punti darebbe barre da sei pixel:
+    // sotto una certa larghezza si scorre, come in qualunque Gantt.
+    return `<div class="gantt"><div class="gantt-scroll"><div class="gantt-body">
+      <div class="gantt-row gantt-head">
+        <span class="gantt-name"></span>
+        <div class="gantt-track">${ore.join("")}</div>
+      </div>
+      ${righe}
+    </div></div></div>`;
+  }
+
+  /* Il dettaglio della barra scelta: gli stessi valori del trascinamento,
+     scritti — perché "le 4 e un quarto" col dito non si prendono. */
+  _barEditor(zones, bars) {
+    const barra = bars.find((b) => b.id === this._selBar);
+    if (!barra) return "";
+    const zona = zones.find((z) => z.id === barra.zone_id) || {};
+
+    return `<ha-card><div class="inner">
+      <div class="card-head">
+        <ha-icon icon="mdi:tune"></ha-icon>
+        <h2>${esc(zona.name || "Accensione")}</h2>
+        <span class="spacer"></span>
+        ${this._button("bar-del", "Elimina", { danger: true })}
+      </div>
+      <div class="log-tools">
+        <div class="ha-field grow">
+          <span class="ha-field-label">Inizio</span>
+          <div class="ha-field-box">
+            <input class="ha-control bar-start" type="time" step="300"
+                   value="${this._hhmm(barra.start_min)}">
+          </div>
+        </div>
+        <div class="ha-field grow">
+          <span class="ha-field-label">Durata (min)</span>
+          <div class="ha-field-box">
+            <input class="ha-control bar-min" type="number" min="1" max="240"
+                   step="1" value="${barra.minutes}">
+          </div>
+        </div>
+      </div>
+      <p class="muted small nomargin">
+        Finisce alle ${this._hhmm(barra.start_min + barra.minutes)}.
+        ${this._acquaDiBarra(zona, barra)}
+      </p>
+    </div></ha-card>`;
+  }
+
+  /* Quanta acqua mette davvero quella barra: è il numero che manca a chi
+     programma a mano, e senza il quale i minuti sono solo minuti. */
+  _acquaDiBarra(zona, barra) {
+    const c = zona.computed || {};
+    const rate = Number(zona.rate_mm_h || 0);
+    const eff = Number(c.efficiency || 1);
+    if (!rate) return "";
+    const mm = rate * (barra.minutes / 60) * eff;
+    const soglia = Number(c.trigger_threshold_mm || 0);
+    return (
+      `Con ${rate} mm/h posa <b>${mm.toFixed(1)} mm</b>` +
+      (soglia ? ` — la soglia di questa linea è ${soglia.toFixed(1)} mm.` : ".")
+    );
   }
 
   // ------------------------------------------------------ NOTIFICHE/AZIONI
@@ -1995,7 +2520,11 @@ class IrrigazioneSmartPanel extends HTMLElement {
       ${this._runningCard()}
       ${this._masterCard(sys, zones, running, sched)}
       ${this._linesCard(zones)}
-      ${this._sequenceCard(sched, sys)}
+      ${
+        sys.mode === "programmato"
+          ? this._todayProgramCard()
+          : this._sequenceCard(sched, sys)
+      }
       ${this._irrigationChart()}
       ${this._systemCard(sys)}
     `;
@@ -5409,6 +5938,76 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .btn.primary:hover { filter: brightness(1.08); }
       .btn.danger { background: var(--error-color, #db4437); color: #fff; }
       .empty-cta { margin-top: 14px; }
+
+      /* ------------------------------------------------------------ Gantt
+
+         Una riga per linea, la giornata da 00:00 a 24:00 in orizzontale.
+         Le larghezze sono in percentuale e non in pixel: la stessa
+         barra vale venti minuti sul telefono e venti minuti sul
+         desktop, senza ricalcolare niente al cambio di schermo. */
+      .gantt { margin-top: 14px; border: 1px solid var(--divider-color);
+               border-radius: 10px; overflow: hidden; }
+      .gantt-scroll { overflow-x: auto; overscroll-behavior-x: contain; }
+      /* sotto questa larghezza le barre diventano schegge: si scorre */
+      .gantt-body { min-width: 620px; }
+      .gantt-row { display: flex; align-items: stretch;
+                   border-top: 1px solid var(--divider-color); }
+      .gantt-row:first-child { border-top: none; }
+      /* il nome resta agganciato a sinistra mentre la giornata scorre:
+         senza, si finisce a guardare barre di cui non si sa più la linea */
+      .gantt-name { flex: 0 0 92px; padding: 8px 10px; font-size: 13px;
+                    display: flex; align-items: center; overflow: hidden;
+                    text-overflow: ellipsis; white-space: nowrap;
+                    position: sticky; left: 0; z-index: 1;
+                    color: var(--primary-text-color);
+                    background: var(--secondary-background-color);
+                    border-right: 1px solid var(--divider-color); }
+      .gantt-track { position: relative; flex: 1 1 auto; height: 44px;
+                     touch-action: pan-y; cursor: copy; }
+      .gantt-head .gantt-track { height: 22px; cursor: default; }
+      .gantt-head { background: var(--secondary-background-color); }
+      .gantt-tick { position: absolute; top: 3px; font-size: 10px;
+                    transform: translateX(-50%);
+                    color: var(--secondary-text-color);
+                    font-variant-numeric: tabular-nums; }
+      /* le linee delle ore: un fondo ripetuto, non cento elementi */
+      .gantt-grid { position: absolute; inset: 0;
+                    background-image: repeating-linear-gradient(
+                      to right, var(--divider-color) 0 1px,
+                      transparent 1px calc(100% / 12)); }
+
+      .gantt-bar { position: absolute; top: 6px; bottom: 6px; min-width: 8px;
+                   border-radius: 6px; cursor: grab; overflow: hidden;
+                   background: var(--info-color, var(--primary-color));
+                   color: var(--text-primary-color, #fff);
+                   display: flex; align-items: center; padding-left: 6px;
+                   touch-action: none; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+      .gantt-bar:active { cursor: grabbing; }
+      .gantt-bar.selected { outline: 2px solid var(--primary-text-color);
+                            outline-offset: 1px; }
+      .gantt-bar-text { font-size: 11px; font-weight: 600; white-space: nowrap;
+                        pointer-events: none; }
+      /* maniglia per allungare: sta sul bordo destro, larga abbastanza
+         da prenderla col pollice */
+      .gantt-grip { position: absolute; right: 0; top: 0; bottom: 0;
+                    width: 14px; cursor: ew-resize;
+                    background: rgba(0,0,0,.18); }
+
+      /* scelta della modalità: due schede, non una tendina — la
+         differenza fra le due va letta prima di sceglierla */
+      .mode-choice { display: grid; gap: 12px; margin-top: 10px;
+                     grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+      .mode-card { display: flex; flex-direction: column; gap: 4px;
+                   align-items: flex-start; text-align: left; cursor: pointer;
+                   font-family: inherit; padding: 14px; border-radius: 12px;
+                   border: 2px solid var(--divider-color); background: none;
+                   color: var(--primary-text-color); }
+      .mode-card:hover { border-color: var(--primary-color); }
+      .mode-card.on { border-color: var(--primary-color);
+                      background: color-mix(in srgb, var(--primary-color) 10%, transparent); }
+      .mode-card ha-icon { color: var(--primary-color); }
+      .mode-title { font-size: 15px; font-weight: 600; }
+      .mode-sub { font-size: 12px; color: var(--secondary-text-color); }
 
       /* cursore di riserva, quando ha-selector non è disponibile */
       .slider-box { display: flex; align-items: center; gap: 12px; }

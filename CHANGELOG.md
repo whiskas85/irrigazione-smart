@@ -8,6 +8,37 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Aggiunto
+- **Irrigazione programmata, disegnata su un Gantt.** Fino a qui decideva
+  il bilancio idrico e basta. Adesso si sceglie: *automatica* — si irriga
+  quando il terreno è sceso sotto soglia, per il tempo che serve — oppure
+  *programmata*, dove gli orari e le durate li disegni tu. Una riga per
+  linea, la giornata in orizzontale, una barra per ogni accensione: si
+  trascina per spostarla, si tira dal bordo destro per allungarla, si
+  tocca una riga vuota per aggiungerne una
+  - **Due barre sovrapposte sono due linee aperte insieme.** È la ragione
+    per cui il programma si disegna invece di scriverlo: in una tabella di
+    orari la sovrapposizione non si vede. Quando c'è, la pagina conta
+    quante linee aprono nello stesso momento e avvisa che la portata si
+    divide fra loro — l'impianto ha una pressione sola, e se non regge la
+    somma gli irrigatori perdono gittata
+  - Sotto ogni barra c'è il numero che serve davvero: *«con 7,4 mm/h posa
+    2,5 mm — la soglia di questa linea è 14 mm»*. I minuti da soli non
+    dicono se stai bagnando o accarezzando
+  - Il motore non esegue una sequenza: a ogni minuto guarda l'orologio e
+    allinea le valvole a quello che il programma prevede adesso. Un
+    riavvio a metà programma non perde niente, una valvola chiusa a mano
+    si riapre al minuto dopo, e la simultaneità viene da sé
+  - L'acqua erogata continua ad andare a bilancio mentre esce: il deficit
+    resta il termometro anche quando non è più lui a decidere
+  - Il meteo può ancora fermare tutto — pioggia in arrivo, vento oltre
+    soglia, gelo — e si disattiva dalle impostazioni per chi vuole un
+    programma che non discute
+- **Pagina Impostazioni.** Erano sparse fra una scheda della dashboard e
+  due dialoghi, e la prima domanda di chiunque era «dove si cambia». Ora
+  c'è una scheda sola: modalità, terreno, blocchi meteo, attese, sorgenti
+  dati e posizione
+
 ## [1.10.0] - 2026-07-30
 
 ### Aggiunto

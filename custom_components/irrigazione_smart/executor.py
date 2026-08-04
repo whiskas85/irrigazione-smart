@@ -118,6 +118,9 @@ class IrrigationExecutor:
         self._store = store
         self._task: asyncio.Task | None = None
         self._state: dict[str, Any] = {}
+        # quando è stata aperta ogni linea del programma, per mettere a
+        # bilancio l'acqua man mano che esce
+        self._program_started: dict[str, Any] = {}
 
     # ------------------------------------------------------------- stato
 
@@ -516,6 +519,98 @@ class IrrigationExecutor:
 
         self._task = self._hass.async_create_task(self._run(queue, trigger=trigger))
         return True
+
+    # --------------------------------------------------------- programmato
+
+    async def async_apply_program(
+        self, governate: set[str], volute: set[str]
+    ) -> None:
+        """Allinea le valvole del programma a quello che serve adesso.
+
+        Riconciliazione, non sequenza: si guarda cosa dovrebbe essere
+        aperto in questo minuto e si corregge la differenza. Non serve
+        ricordare cosa è già partito — dopo un riavvio, dopo una valvola
+        chiusa a mano, dopo un'ora di rete assente, il minuto dopo il
+        programma è di nuovo allineato da sé.
+
+        `governate` sono le linee che compaiono nel programma: le altre
+        non si toccano, perché possono essere aperte da un'automazione di
+        casa che non ci riguarda.
+        """
+        if self.running:
+            # una forzatura manuale ha la precedenza: chi ha premuto il
+            # pulsante sta guardando l'impianto, il programma no
+            return
+
+        log = get_log(self._hass)
+        for zone_id in governate:
+            zone = self._store.zones.get(zone_id) or {}
+            valve = zone.get("valve_entity")
+            if not valve:
+                continue
+
+            state = self._hass.states.get(valve)
+            if state is None or state.state in ("unknown", "unavailable"):
+                continue
+            aperta = state.state in OPEN_STATES
+
+            if zone_id in volute and not aperta:
+                await self._switch_valve(valve, True)
+                self._program_started[zone_id] = dt_util.utcnow()
+                if log:
+                    log.add("zone_started", f"{zone.get('name')}: apre da programma")
+            elif zone_id not in volute and aperta:
+                await self._close_confirmed(valve, zone.get("name") or "Linea")
+                self._settle_program_zone(zone_id, zone)
+
+        # l'acqua che sta uscendo adesso va a bilancio mentre esce, non a
+        # fine barra: un riavvio a metà non deve farla sparire
+        for zone_id in volute:
+            self._charge_program_zone(zone_id)
+
+        async_dispatcher_send(self._hass, SIGNAL_STATE_CHANGED)
+
+    def _charge_program_zone(self, zone_id: str) -> None:
+        """Scala dal deficit l'acqua uscita dall'ultimo giro a oggi."""
+        partenza = self._program_started.get(zone_id)
+        if partenza is None:
+            self._program_started[zone_id] = dt_util.utcnow()
+            return
+
+        adesso = dt_util.utcnow()
+        minuti = (adesso - partenza).total_seconds() / 60.0
+        self._program_started[zone_id] = adesso
+        if minuti <= 0:
+            return
+
+        zone = self._store.zones.get(zone_id)
+        if zone is None:
+            return
+        params = resolve_zone_params(zone, self._store.system)
+        applicati = params.applied_mm(minuti)
+        if applicati <= 0:
+            return
+
+        deficit = max(0.0, float(zone.get("deficit_mm") or 0.0) - applicati)
+        self._store.async_set_deficit(zone_id, deficit)
+        self._store.async_add_irrigation(
+            zone_category(zone.get("zone_type")), round(minuti, 1)
+        )
+
+    def _settle_program_zone(self, zone_id: str, zone: dict[str, Any]) -> None:
+        """Chiude i conti della linea a fine barra."""
+        self._charge_program_zone(zone_id)
+        partenza = self._program_started.pop(zone_id, None)
+        if partenza is None:
+            return
+        self._store.async_set_runtime(
+            zone_id,
+            last_irrigation=dt_util.now().isoformat(),
+            last_trigger="programma",
+        )
+        log = get_log(self._hass)
+        if log:
+            log.add("zone_finished", f"{zone.get('name')}: chiude da programma")
 
     # ------------------------------------------------------------ taratura
 

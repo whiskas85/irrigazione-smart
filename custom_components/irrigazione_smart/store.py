@@ -33,6 +33,18 @@ except ImportError:  # pragma: no cover - fallback difensivo
 DEFAULT_SYSTEM: dict[str, Any] = {
     "soil": "franco",
     "master_enabled": True,
+    # Chi decide quando esce l'acqua.
+    #
+    #   "automatico"  — il bilancio idrico: si irriga quando il terreno è
+    #                   sceso sotto soglia, per il tempo che serve a
+    #                   rimetterlo a posto
+    #   "programmato" — l'utente, col Gantt: orari e durate fissi, e il
+    #                   bilancio resta a fare da termometro senza decidere
+    "mode": "automatico",
+    # Anche col programma manuale il meteo può fermare l'acqua: piove, ha
+    # appena piovuto, o sta per gelare. Si può spegnere, ma spegnerlo
+    # significa irrigare sotto la pioggia.
+    "program_guards": True,
     "window_start": "04:00",
     "window_end": "08:00",
     "overflow_policy": "truncate",
@@ -186,6 +198,30 @@ DEFAULT_DAILY: dict[str, Any] = {
 # Giorni di storico conservati per i grafici. Tre mesi bastano a leggere
 # una stagione senza far crescere il file all'infinito.
 HISTORY_DAYS: int = 90
+
+# ------------------------------------------------------------- programma
+#
+# L'irrigazione decisa a mano: una barra per ogni accensione, con la linea
+# che apre, il minuto in cui parte e quanto dura. Due barre che si
+# sovrappongono sono due linee aperte insieme — è la ragione per cui il
+# programma si disegna invece di scriverlo: la sovrapposizione si vede.
+#
+# I giorni valgono per tutto il programma: uno schema solo, ripetuto nei
+# giorni scelti, è quello che si riesce a tenere in testa. Sette schemi
+# diversi si disallineano al primo cambio di stagione.
+
+DEFAULT_PROGRAM: dict[str, Any] = {
+    "days": ["mon", "wed", "fri", "sun"],
+    "bars": [],
+}
+
+# Una barra del Gantt.
+PROGRAM_BAR_FIELDS: dict[str, Any] = {
+    "zone_id": None,
+    # minuti dalla mezzanotte: 04:30 = 270
+    "start_min": 240,
+    "minutes": 15,
+}
 
 # ---------------------------------------------------------------- mappa
 #
@@ -362,6 +398,7 @@ class IrrigazioneStore:
                 "history": stored.get("history") or [],
                 "map": {**DEFAULT_MAP, **(stored.get("map") or {})},
                 "calibration": stored.get("calibration") or [],
+                "program": {**DEFAULT_PROGRAM, **(stored.get("program") or {})},
             }
         else:
             self._data = {
@@ -374,6 +411,7 @@ class IrrigazioneStore:
                 "history": [],
                 "map": dict(DEFAULT_MAP),
                 "calibration": [],
+                "program": dict(DEFAULT_PROGRAM),
             }
 
         self._ensure_groups()
@@ -454,6 +492,51 @@ class IrrigazioneStore:
     def async_save_daily(self, daily: dict[str, Any]) -> None:
         """Sostituisce gli accumulatori giornalieri e persiste."""
         self._data["daily"] = daily
+        self._save()
+
+    @property
+    def program(self) -> dict[str, Any]:
+        """Il programma manuale, con le sue barre ordinate per orario."""
+        stored = {**DEFAULT_PROGRAM, **(self._data.get("program") or {})}
+        stored["bars"] = sorted(
+            stored.get("bars") or [], key=lambda b: (b.get("start_min") or 0)
+        )
+        return stored
+
+    def async_save_program(self, program: dict[str, Any]) -> None:
+        """Sostituisce il programma, ripulendo le barre non valide.
+
+        Una barra senza linea, o lunga zero, non è un dato da conservare:
+        è il residuo di un trascinamento andato storto, e lasciarla lì
+        vorrebbe dire vederla riapparire nel Gantt a ogni ricarica.
+        """
+        barre = []
+        for barra in program.get("bars") or []:
+            zone_id = barra.get("zone_id")
+            if zone_id not in self._data["zones"]:
+                continue
+            try:
+                inizio = int(barra.get("start_min"))
+                durata = int(barra.get("minutes"))
+            except (TypeError, ValueError):
+                continue
+            if durata <= 0:
+                continue
+            barre.append(
+                {
+                    "id": barra.get("id") or ulid_now(),
+                    "zone_id": zone_id,
+                    # il giorno finisce a mezzanotte: una barra che
+                    # sforerebbe viene tagliata lì, non spezzata sul
+                    # giorno dopo — l'irrigazione notturna si programma
+                    # dopo la mezzanotte, non a cavallo
+                    "start_min": max(0, min(inizio, 24 * 60 - 1)),
+                    "minutes": min(durata, 24 * 60 - max(0, inizio)),
+                }
+            )
+
+        giorni = [d for d in (program.get("days") or []) if d in WEEKDAYS]
+        self._data["program"] = {"days": giorni, "bars": barre}
         self._save()
 
     @property

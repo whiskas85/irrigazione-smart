@@ -78,6 +78,10 @@ VALVE_CONFIRM_TIMEOUT: Final = 30
 # pacchetto perso.
 VALVE_RETRIES: Final = 2
 
+# Sotto questa temperatura non si irriga: l'acqua sull'erba gelata la
+# spacca, e sul vialetto diventa una lastra.
+FROST_LIMIT_C: Final = 2.0
+
 # ------------------------------------------------------------------ taratura
 #
 # Quanto dura la prova di una linea. Non serve irrigare: serve leggere una
