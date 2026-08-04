@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-08-04
+
 ### Aggiunto
 - **Irrigazione programmata, disegnata su un Gantt.** Fino a qui decideva
   il bilancio idrico e basta. Adesso si sceglie: *automatica* — si irriga
