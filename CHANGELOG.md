@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-08-04
+
 ### Aggiunto
 - **La rotellina scorre la giornata.** È il verso naturale in un
   diagramma temporale: il tempo va in orizzontale, e chi guarda un Gantt
