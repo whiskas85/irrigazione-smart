@@ -58,6 +58,14 @@ const PROGRAM_TAB = {
 const GANTT_STEP_MIN = 5;
 const GIORNO_MIN = 24 * 60;
 
+/* Ingrandimenti del Gantt, in larghezza della giornata.
+
+   A 620 punti l'intera giornata sta in uno schermo di telefono, ma
+   un'accensione da quindici minuti è una scheggia di sei pixel: si vede
+   che c'è, non a che ora. Ingrandendo si scorre — è il compromesso di
+   qualunque diagramma temporale — e le ore diventano leggibili. */
+const GANTT_ZOOMS = [620, 1000, 1600, 2600, 4200];
+
 const DAY_LABELS = {
   mon: "Lun", tue: "Mar", wed: "Mer", thu: "Gio",
   fri: "Ven", sat: "Sab", sun: "Dom",
@@ -1337,28 +1345,71 @@ class IrrigazioneSmartPanel extends HTMLElement {
       });
     });
 
+    // Zoom del diagramma
+    sr.querySelectorAll(".zoom-in, .zoom-out").forEach((b) => {
+      b.addEventListener("click", () => {
+        const verso = b.classList.contains("zoom-in") ? 1 : -1;
+        this._ganttZoom = Math.max(
+          0,
+          Math.min(GANTT_ZOOMS.length - 1, (this._ganttZoom ?? 0) + verso)
+        );
+        this._render();
+      });
+    });
+
     const start = sr.querySelector(".bar-start");
     const minuti = sr.querySelector(".bar-min");
+
+    /* I campi scrivono senza far ridisegnare la pagina: l'input deve
+       restare lo stesso elemento fino a quando non lo si lascia. */
     const applica = () => {
       const { days, bars } = this._program();
       const barra = bars.find((b) => b.id === this._selBar);
-      if (!barra) return;
-      const [h, m] = (start.value || "00:00").split(":").map(Number);
-      this._salvaProgramma({
-        days,
-        bars: bars.map((b) =>
-          b.id === barra.id
-            ? {
-                ...b,
-                start_min: Math.max(0, Math.min(GIORNO_MIN - 1, h * 60 + m)),
-                minutes: Math.max(1, Number(minuti.value) || 1),
-              }
-            : b
-        ),
-      });
+      if (!barra) return false;
+
+      const [h, m] = (start.value || "").split(":").map(Number);
+      if (!Number.isFinite(h) || !Number.isFinite(m)) return false;
+      const durata = Math.max(1, Math.min(GIORNO_MIN, Number(minuti.value) || 1));
+      const inizio = Math.max(0, Math.min(GIORNO_MIN - 1, h * 60 + m));
+      if (inizio === barra.start_min && durata === barra.minutes) return false;
+
+      this._salvaProgramma(
+        {
+          days,
+          bars: bars.map((b) =>
+            b.id === barra.id
+              ? { ...b, start_min: inizio, minutes: durata }
+              : b
+          ),
+        },
+        { ridisegna: false }
+      );
+      return true;
     };
-    if (start) start.addEventListener("change", applica);
-    if (minuti) minuti.addEventListener("change", applica);
+
+    [start, minuti].forEach((campo) => {
+      if (!campo) return;
+      // `input` mentre si scrive, `change` quando si esce: il primo tiene
+      // il diagramma allineato in tempo reale, il secondo prende anche le
+      // frecce del selettore orario
+      campo.addEventListener("input", applica);
+      campo.addEventListener("change", applica);
+      // uscendo dal campo si ridisegna una volta sola, per rimettere in
+      // ordine i pulsanti di aggancio e l'elenco ordinato
+      campo.addEventListener("blur", () => this._render());
+    });
+
+    sr.querySelectorAll(".bar-move").forEach((b) => {
+      b.addEventListener("click", () => {
+        this._spostaBarra(Number(b.getAttribute("data-delta")));
+      });
+    });
+
+    sr.querySelectorAll(".bar-snap").forEach((b) => {
+      b.addEventListener("click", () => {
+        this._agganciaBarra(b.getAttribute("data-side"));
+      });
+    });
 
     const elimina = sr.querySelector(".bar-del");
     if (elimina) {
@@ -1476,16 +1527,96 @@ class IrrigazioneSmartPanel extends HTMLElement {
     });
   }
 
-  /* Salva il programma e ridisegna. Lo stato locale si aggiorna subito:
-     aspettare il giro di rete farebbe tornare indietro la barra appena
-     rilasciata, e sembrerebbe che il trascinamento non abbia preso. */
-  async _salvaProgramma(program) {
+  /* Salva il programma. Lo stato locale si aggiorna subito: aspettare il
+     giro di rete farebbe tornare indietro la barra appena rilasciata, e
+     sembrerebbe che il trascinamento non abbia preso.
+
+     `ridisegna` è falso quando la modifica arriva da un campo di testo.
+     Ridisegnare butta via l'input su cui si sta scrivendo — l'elemento
+     viene distrutto e ricreato — e il fuoco se ne va dopo la prima
+     cifra: si scriveva "04" e il campo sbatteva fuori. In quel caso si
+     aggiorna a mano solo ciò che è cambiato. */
+  async _salvaProgramma(program, { ridisegna = true } = {}) {
     this._overview.program = {
       days: program.days,
       bars: [...program.bars].sort((a, b) => a.start_min - b.start_min),
     };
-    this._render();
-    await this._mutate("POST", "program", program);
+    if (ridisegna) this._render();
+    else this._aggiornaBarra();
+    await this._mutateQuiet("POST", "program", program);
+  }
+
+  /* Sposta l'accensione avanti o indietro nel tempo, senza cambiarne la
+     durata. Il trascinamento va bene per la posizione approssimativa;
+     questi pulsanti servono per i cinque minuti esatti, che col dito su
+     una barra da dieci pixel non si prendono. */
+  _spostaBarra(delta) {
+    const { days, bars } = this._program();
+    const barra = bars.find((b) => b.id === this._selBar);
+    if (!barra) return;
+
+    const inizio = Math.max(
+      0,
+      Math.min(GIORNO_MIN - barra.minutes, barra.start_min + delta)
+    );
+    if (inizio === barra.start_min) return;
+    this._salvaProgramma({
+      days,
+      bars: bars.map((b) => (b.id === barra.id ? { ...b, start_min: inizio } : b)),
+    });
+  }
+
+  /* Attacca l'accensione a quella prima o a quella dopo.
+
+     È il gesto con cui si costruisce una sequenza: la linea due comincia
+     quando la uno ha finito, senza buchi e senza sovrapposizioni. Farlo
+     a occhio col trascinamento significa lasciare tre minuti di vuoto
+     che nessuno vede. */
+  _agganciaBarra(lato) {
+    const { days, bars } = this._program();
+    const barra = bars.find((b) => b.id === this._selBar);
+    if (!barra) return;
+
+    let inizio = barra.start_min;
+    if (lato === "prima") {
+      const prima = this._barraPrecedente(barra, bars);
+      if (!prima) return;
+      inizio = prima.start_min + prima.minutes;
+    } else {
+      const dopo = this._barraSuccessiva(barra, bars);
+      if (!dopo) return;
+      inizio = Math.max(0, dopo.start_min - barra.minutes);
+    }
+
+    this._salvaProgramma({
+      days,
+      bars: bars.map((b) => (b.id === barra.id ? { ...b, start_min: inizio } : b)),
+    });
+  }
+
+  /* Ridisegna la sola barra selezionata, senza toccare il resto. */
+  _aggiornaBarra() {
+    const sr = this.shadowRoot;
+    const { bars } = this._program();
+    const barra = bars.find((b) => b.id === this._selBar);
+    if (!barra) return;
+
+    const el = sr.querySelector(`.gantt-bar[data-bar="${barra.id}"]`);
+    if (el) {
+      el.style.left = `${(barra.start_min / GIORNO_MIN) * 100}%`;
+      el.style.width = `${(barra.minutes / GIORNO_MIN) * 100}%`;
+      const testo = el.querySelector(".gantt-bar-text");
+      if (testo) {
+        testo.textContent = `${this._hhmm(barra.start_min)} · ${barra.minutes}′`;
+      }
+    }
+
+    const orologio = sr.querySelector(".bar-clock");
+    if (orologio) orologio.textContent = this._hhmm(barra.start_min);
+
+    const zona = (this._overview.zones || []).find((z) => z.id === barra.zone_id);
+    const riga = sr.querySelector(".bar-summary");
+    if (riga && zona) riga.innerHTML = this._barSummary(zona, barra);
   }
 
   /* ---------------------------------------------------------------------
@@ -1738,9 +1869,20 @@ class IrrigazioneSmartPanel extends HTMLElement {
       ${this._barEditor(zones, bars)}`;
   }
 
+  _ganttWidth() {
+    const livello = Math.max(
+      0,
+      Math.min(GANTT_ZOOMS.length - 1, this._ganttZoom ?? 0)
+    );
+    return GANTT_ZOOMS[livello];
+  }
+
   _ganttHtml(zones, bars) {
+    const larghezza = this._ganttWidth();
+    // più si ingrandisce, più fitte possono stare le ore senza pestarsi
+    const passo = larghezza >= 2600 ? 1 : larghezza >= 1000 ? 2 : 3;
     const ore = [];
-    for (let h = 0; h <= 24; h += 2) {
+    for (let h = 0; h <= 24; h += passo) {
       ore.push(
         `<span class="gantt-tick" style="left:${(h / 24) * 100}%">${String(h).padStart(2, "0")}</span>`
       );
@@ -1770,15 +1912,30 @@ class IrrigazioneSmartPanel extends HTMLElement {
       })
       .join("");
 
+    const livello = this._ganttZoom ?? 0;
     // La giornata intera in trecento punti darebbe barre da sei pixel:
     // sotto una certa larghezza si scorre, come in qualunque Gantt.
-    return `<div class="gantt"><div class="gantt-scroll"><div class="gantt-body">
-      <div class="gantt-row gantt-head">
-        <span class="gantt-name"></span>
-        <div class="gantt-track">${ore.join("")}</div>
+    return `<div class="gantt-tools">
+        <span class="sub">Ingrandimento</span>
+        <button type="button" class="btn icon zoom-out"${
+          livello === 0 ? " disabled" : ""
+        } title="Riduci"><ha-icon icon="mdi:magnify-minus-outline"></ha-icon></button>
+        <button type="button" class="btn icon zoom-in"${
+          livello >= GANTT_ZOOMS.length - 1 ? " disabled" : ""
+        } title="Ingrandisci"><ha-icon icon="mdi:magnify-plus-outline"></ha-icon></button>
+        <span class="spacer"></span>
+        <span class="sub">${
+          livello === 0 ? "giornata intera" : `${(GANTT_ZOOMS[livello] / 620).toFixed(1)}×`
+        }</span>
       </div>
-      ${righe}
-    </div></div></div>`;
+      <div class="gantt"><div class="gantt-scroll"><div class="gantt-body"
+           style="min-width:${larghezza}px">
+        <div class="gantt-row gantt-head">
+          <span class="gantt-name"></span>
+          <div class="gantt-track">${ore.join("")}</div>
+        </div>
+        ${righe}
+      </div></div></div>`;
   }
 
   /* Il dettaglio della barra scelta: gli stessi valori del trascinamento,
@@ -1788,6 +1945,9 @@ class IrrigazioneSmartPanel extends HTMLElement {
     if (!barra) return "";
     const zona = zones.find((z) => z.id === barra.zone_id) || {};
 
+    const prima = this._barraPrecedente(barra, bars);
+    const dopo = this._barraSuccessiva(barra, bars);
+
     return `<ha-card><div class="inner">
       <div class="card-head">
         <ha-icon icon="mdi:tune"></ha-icon>
@@ -1795,6 +1955,32 @@ class IrrigazioneSmartPanel extends HTMLElement {
         <span class="spacer"></span>
         ${this._button("bar-del", "Elimina", { danger: true })}
       </div>
+
+      <div class="bar-tools">
+        <button type="button" class="btn icon bar-move" data-delta="-30"
+                title="Anticipa di mezz'ora">
+          <ha-icon icon="mdi:chevron-double-left"></ha-icon></button>
+        <button type="button" class="btn icon bar-move" data-delta="-5"
+                title="Anticipa di 5 minuti">
+          <ha-icon icon="mdi:chevron-left"></ha-icon></button>
+        <span class="bar-clock">${this._hhmm(barra.start_min)}</span>
+        <button type="button" class="btn icon bar-move" data-delta="5"
+                title="Ritarda di 5 minuti">
+          <ha-icon icon="mdi:chevron-right"></ha-icon></button>
+        <button type="button" class="btn icon bar-move" data-delta="30"
+                title="Ritarda di mezz'ora">
+          <ha-icon icon="mdi:chevron-double-right"></ha-icon></button>
+        <span class="spacer"></span>
+        <button type="button" class="btn bar-snap" data-side="prima"${
+          prima ? "" : " disabled"
+        } title="Fa partire questa quando finisce quella prima">
+          <ha-icon icon="mdi:format-horizontal-align-left"></ha-icon> Attacca</button>
+        <button type="button" class="btn bar-snap" data-side="dopo"${
+          dopo ? "" : " disabled"
+        } title="La fa finire quando comincia quella dopo">
+          Attacca <ha-icon icon="mdi:format-horizontal-align-right"></ha-icon></button>
+      </div>
+
       <div class="log-tools">
         <div class="ha-field grow">
           <span class="ha-field-label">Inizio</span>
@@ -1811,11 +1997,27 @@ class IrrigazioneSmartPanel extends HTMLElement {
           </div>
         </div>
       </div>
-      <p class="muted small nomargin">
-        Finisce alle ${this._hhmm(barra.start_min + barra.minutes)}.
-        ${this._acquaDiBarra(zona, barra)}
-      </p>
+      <p class="muted small nomargin bar-summary">${this._barSummary(zona, barra)}</p>
     </div></ha-card>`;
+  }
+
+  _barSummary(zona, barra) {
+    return `Finisce alle ${this._hhmm(barra.start_min + barra.minutes)}.
+      ${this._acquaDiBarra(zona, barra)}`;
+  }
+
+  /* L'accensione che finisce più tardi, fra quelle che finiscono prima
+     dell'inizio di questa. È quella a cui "attaccarsi" a sinistra. */
+  _barraPrecedente(barra, bars) {
+    return bars
+      .filter((b) => b.id !== barra.id && b.start_min + b.minutes <= barra.start_min)
+      .sort((a, b) => b.start_min + b.minutes - (a.start_min + a.minutes))[0];
+  }
+
+  _barraSuccessiva(barra, bars) {
+    return bars
+      .filter((b) => b.id !== barra.id && b.start_min >= barra.start_min + barra.minutes)
+      .sort((a, b) => a.start_min - b.start_min)[0];
   }
 
   /* Quanta acqua mette davvero quella barra: è il numero che manca a chi
@@ -6013,7 +6215,18 @@ class IrrigazioneSmartPanel extends HTMLElement {
          Le larghezze sono in percentuale e non in pixel: la stessa
          barra vale venti minuti sul telefono e venti minuti sul
          desktop, senza ricalcolare niente al cambio di schermo. */
-      .gantt { margin-top: 14px; border: 1px solid var(--divider-color);
+      /* barra degli strumenti sopra il diagramma, e quella della barra
+         selezionata: stessa forma, così si riconoscono come comandi */
+      .gantt-tools, .bar-tools { display: flex; align-items: center; gap: 6px;
+                                 flex-wrap: wrap; margin-top: 12px; }
+      .btn.icon { padding: 8px; border-radius: 50%; line-height: 0;
+                  min-width: 40px; display: inline-flex; justify-content: center; }
+      .btn.icon ha-icon { --mdc-icon-size: 20px; }
+      .bar-clock { font-size: 18px; font-weight: 600; min-width: 62px;
+                   text-align: center; font-variant-numeric: tabular-nums;
+                   color: var(--primary-text-color); }
+
+      .gantt { margin-top: 8px; border: 1px solid var(--divider-color);
                border-radius: 10px; overflow: hidden; }
       .gantt-scroll { overflow-x: auto; overscroll-behavior-x: contain; }
       /* sotto questa larghezza le barre diventano schegge: si scorre */

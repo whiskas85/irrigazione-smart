@@ -8,6 +8,29 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Corretto
+- **Scrivendo l'orario di un'accensione, il campo sbatteva fuori dopo la
+  prima cifra.** A ogni tasto la pagina si ridisegnava, e ridisegnare
+  distrugge l'input su cui si sta scrivendo: il fuoco se ne andava
+  insieme all'elemento. Adesso i campi aggiornano solo la barra
+  interessata, e la pagina si rimette in ordine quando esci dal campo
+
+### Aggiunto
+- **Zoom sul diagramma.** La giornata intera in trecento punti rende
+  un'accensione da un quarto d'ora una scheggia di sei pixel: si vede che
+  c'è, non a che ora. Due pulsanti ingrandiscono fino a 6,8× — il
+  diagramma scorre e le ore si leggono una per una, col nome della linea
+  che resta agganciato a sinistra
+- **Comandi per spostare l'accensione al minuto.** Frecce da 5 minuti e
+  da mezz'ora, con l'orario in mezzo che cambia mentre premi. Il
+  trascinamento va bene per la posizione approssimativa: i cinque minuti
+  esatti, su una barra da dieci pixel, col dito non si prendono
+- **Aggancio all'accensione prima e a quella dopo.** È il gesto con cui
+  si costruisce una sequenza — la linea due comincia quando la uno ha
+  finito — senza lasciare i tre minuti di vuoto che a occhio non si
+  vedono. Un pulsante attacca a sinistra, l'altro fa finire questa
+  esattamente quando comincia la successiva
+
 ## [1.11.1] - 2026-08-04
 
 ### Modificato
