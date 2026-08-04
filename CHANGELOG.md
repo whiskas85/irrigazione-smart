@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.14.1] - 2026-08-05
+
 ### Modificato
 - **La voce nella barra laterale si chiama Garden Assistant**, e così
   anche l'intestazione della pagina. L'integration resta
