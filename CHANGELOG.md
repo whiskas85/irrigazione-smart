@@ -8,6 +8,24 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Aggiunto
+- **La rotellina scorre la giornata.** È il verso naturale in un
+  diagramma temporale: il tempo va in orizzontale, e chi guarda un Gantt
+  gira la rotellina per andare avanti nelle ore, non per uscire dal
+  diagramma. Col tasto control ingrandisce e riduce, come su una mappa.
+  Quando non c'è niente da scorrere la pagina resta libera di muoversi
+- **La linea di adesso.** Una riga verticale rossa attraversa tutte le
+  linee all'ora corrente, con l'orario in cima, e cammina da sola.
+  Senza, il diagramma dice cosa è previsto ma non se è già passato
+
+### Modificato
+- **Tolti i doppioni finiti in due schede.** *Impostazioni comuni* stava
+  sulla dashboard **e** nelle impostazioni; *Sorgenti dati* e *Posizione*
+  stavano nel meteo **e** nelle impostazioni. Due posti per cambiare la
+  stessa cosa vogliono dire uno dei due sempre dimenticato: adesso la
+  configurazione sta solo in Impostazioni, e dove serviva è rimasto il
+  rimando
+
 ## [1.12.0] - 2026-08-04
 
 ### Corretto

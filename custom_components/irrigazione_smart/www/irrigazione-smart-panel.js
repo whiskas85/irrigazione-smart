@@ -290,6 +290,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
     clearInterval(this._waitTimer);
     clearTimeout(this._restartTimer);
     clearTimeout(this._noticeTimer);
+    clearInterval(this._nowTimer);
     if (this._resizeObs) this._resizeObs.disconnect();
   }
 
@@ -1435,6 +1436,46 @@ class IrrigazioneSmartPanel extends HTMLElement {
     const gantt = sr.querySelector(".gantt");
     if (!gantt) return;
 
+    this._startNowTicker();
+
+    /* La rotellina scorre la giornata invece della pagina.
+
+       È il verso naturale in un diagramma temporale: il tempo va in
+       orizzontale, e chi guarda un Gantt gira la rotellina per andare
+       avanti nelle ore, non per uscire dal diagramma. Col tasto
+       control ingrandisce, come in qualunque mappa. */
+    const scroll = sr.querySelector(".gantt-scroll");
+    if (scroll) {
+      scroll.addEventListener(
+        "wheel",
+        (ev) => {
+          if (ev.ctrlKey) {
+            ev.preventDefault();
+            const verso = ev.deltaY < 0 ? 1 : -1;
+            const prima = this._ganttZoom ?? 0;
+            const dopo = Math.max(
+              0,
+              Math.min(GANTT_ZOOMS.length - 1, prima + verso)
+            );
+            if (dopo !== prima) {
+              this._ganttZoom = dopo;
+              this._render();
+            }
+            return;
+          }
+          // niente da scorrere: si lascia scorrere la pagina
+          if (scroll.scrollWidth <= scroll.clientWidth) return;
+          const passo = Math.abs(ev.deltaX) > Math.abs(ev.deltaY)
+            ? ev.deltaX
+            : ev.deltaY;
+          if (!passo) return;
+          ev.preventDefault();
+          scroll.scrollLeft += passo;
+        },
+        { passive: false }
+      );
+    }
+
     const minutiDaX = (track, clientX) => {
       const box = track.getBoundingClientRect();
       const frazione = (clientX - box.left) / (box.width || 1);
@@ -1869,6 +1910,50 @@ class IrrigazioneSmartPanel extends HTMLElement {
       ${this._barEditor(zones, bars)}`;
   }
 
+  /* La linea di adesso.
+
+     Un diagramma orario senza il presente si legge come una tabella: si
+     sa cosa è previsto, non se è già passato. La linea dice a colpo
+     d'occhio quali accensioni sono alle spalle e quale sta per arrivare.
+
+     Parte dopo la colonna dei nomi, che è larga fissa e resta agganciata
+     a sinistra: da lì in poi la traccia è la giornata intera. */
+  _ganttNow() {
+    const ora = new Date();
+    const minuti = ora.getHours() * 60 + ora.getMinutes();
+    const frazione = minuti / GIORNO_MIN;
+
+    // A fine giornata l'etichetta sborderebbe a destra, allargando la
+    // parte scorrevole di una manciata di pixel che non contengono
+    // nulla: verso sera si mette a sinistra della linea.
+    return `<div class="gantt-now${frazione > 0.85 ? " a-sinistra" : ""}" data-now
+              style="left: calc(92px + (100% - 92px) * ${frazione.toFixed(5)})">
+        <span class="gantt-now-time">${this._hhmm(minuti)}</span>
+      </div>`;
+  }
+
+  /* Fa camminare la linea senza ridisegnare la pagina: un ridisegno ogni
+     mezzo minuto butterebbe via la barra che si sta trascinando. */
+  _startNowTicker() {
+    clearInterval(this._nowTimer);
+    const linea = this.shadowRoot.querySelector("[data-now]");
+    if (!linea) return;
+
+    this._nowTimer = setInterval(() => {
+      if (!linea.isConnected) {
+        clearInterval(this._nowTimer);
+        return;
+      }
+      const ora = new Date();
+      const minuti = ora.getHours() * 60 + ora.getMinutes();
+      const frazione = minuti / GIORNO_MIN;
+      linea.style.left = `calc(92px + (100% - 92px) * ${frazione.toFixed(5)})`;
+      linea.classList.toggle("a-sinistra", frazione > 0.85);
+      const testo = linea.querySelector(".gantt-now-time");
+      if (testo) testo.textContent = this._hhmm(minuti);
+    }, 30000);
+  }
+
   _ganttWidth() {
     const livello = Math.max(
       0,
@@ -1935,6 +2020,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
           <div class="gantt-track">${ore.join("")}</div>
         </div>
         ${righe}
+        ${this._ganttNow()}
       </div></div></div>`;
   }
 
@@ -2796,7 +2882,6 @@ class IrrigazioneSmartPanel extends HTMLElement {
           : this._sequenceCard(sched, sys)
       }
       ${this._irrigationChart()}
-      ${this._systemCard(sys)}
     `;
   }
 
@@ -4721,12 +4806,26 @@ class IrrigazioneSmartPanel extends HTMLElement {
     this._layoutFallback(dlg);
   }
 
+  /* Meteo: solo letture e andamenti.
+
+     Le sorgenti e la posizione sono configurazione, e stanno nella
+     pagina delle impostazioni insieme a tutto il resto: averle anche
+     qui voleva dire due posti dove cambiare la stessa cosa, e uno dei
+     due sempre dimenticato. */
   _meteoTab() {
     return `${this._et0Card()}
       ${this._forecastCard()}
       ${this._weatherCharts()}
-      ${this._sensorsCard(this._overview.system)}
-      ${this._locationCard(this._overview.system)}`;
+      <ha-card><div class="inner">
+        <div class="row">
+          <ha-icon icon="mdi:gauge"></ha-icon>
+          <div class="row-main">
+            <span class="row-label">Sorgenti dei dati</span>
+            <span class="sub">quali sensori alimentano questi numeri, e il meteo di riserva</span>
+          </div>
+          ${this._button("go-settings", "Impostazioni")}
+        </div>
+      </div></ha-card>`;
   }
 
   /* Temperatura e umidità: due grandezze con scale diverse, quindi due
@@ -6230,7 +6329,20 @@ class IrrigazioneSmartPanel extends HTMLElement {
                border-radius: 10px; overflow: hidden; }
       .gantt-scroll { overflow-x: auto; overscroll-behavior-x: contain; }
       /* sotto questa larghezza le barre diventano schegge: si scorre */
-      .gantt-body { min-width: 620px; }
+      .gantt-body { min-width: 620px; position: relative; }
+
+      /* Adesso. Una riga verticale che attraversa tutte le linee, col suo
+         orario in cima: senza, il diagramma dice cosa è previsto ma non
+         se è già passato. */
+      .gantt-now { position: absolute; top: 0; bottom: 0; width: 2px;
+                   background: var(--error-color, #db4437); z-index: 2;
+                   pointer-events: none; }
+      .gantt-now.a-sinistra .gantt-now-time { left: auto; right: 3px; }
+      .gantt-now-time { position: absolute; top: 2px; left: 3px;
+                        font-size: 10px; font-weight: 700; line-height: 1.4;
+                        padding: 0 4px; border-radius: 4px; white-space: nowrap;
+                        font-variant-numeric: tabular-nums;
+                        background: var(--error-color, #db4437); color: #fff; }
       .gantt-row { display: flex; align-items: stretch;
                    border-top: 1px solid var(--divider-color); }
       .gantt-row:first-child { border-top: none; }
@@ -6239,7 +6351,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .gantt-name { flex: 0 0 92px; padding: 8px 10px; font-size: 13px;
                     display: flex; align-items: center; overflow: hidden;
                     text-overflow: ellipsis; white-space: nowrap;
-                    position: sticky; left: 0; z-index: 1;
+                    position: sticky; left: 0; z-index: 3;
                     color: var(--primary-text-color);
                     background: var(--secondary-background-color);
                     border-right: 1px solid var(--divider-color); }
