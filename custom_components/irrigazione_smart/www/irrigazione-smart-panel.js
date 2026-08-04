@@ -42,12 +42,14 @@ const TAIL_TABS = [
   { id: "impostazioni", label: "Impostazioni", icon: "mdi:cog-outline" },
 ];
 
-/* La scheda del programma manuale compare solo quando comanda lui: in
-   automatico sarebbe un Gantt che non fa succedere niente. */
+/* Tutto ciò che riguarda il *quando* sta qui, in qualunque modalità: le
+   finestre e i giorni dei gruppi se decide il bilancio idrico, il Gantt
+   se decide l'utente. Prima gli orari erano ripetuti dentro ogni scheda
+   di gruppo, e per cambiare due impianti si passava da due pagine. */
 const PROGRAM_TAB = {
   id: "programma",
-  label: "Programma",
-  icon: "mdi:chart-timeline",
+  label: "Programmazione",
+  icon: "mdi:calendar-clock",
 };
 
 /* Passo di trascinamento del Gantt. Cinque minuti sono la risoluzione
@@ -669,15 +671,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
         icon: icons[key] || "mdi:sprinkler-variant",
       }));
 
-    const programmato =
-      ((this._overview && this._overview.system) || {}).mode === "programmato";
-
-    return [
-      ...BASE_TABS,
-      ...(programmato ? [PROGRAM_TAB] : []),
-      ...groupTabs,
-      ...TAIL_TABS,
-    ];
+    return [...BASE_TABS, PROGRAM_TAB, ...groupTabs, ...TAIL_TABS];
   }
 
   // ------------------------------------------------------------- render
@@ -863,13 +857,24 @@ class IrrigazioneSmartPanel extends HTMLElement {
     });
     onClick(".go-program", () => {
       this._tab = "programma";
+      this._setNotice(null);
+      this._render();
+    });
+    onClick(".go-settings", () => {
+      this._tab = "impostazioni";
+      this._setNotice(null);
       this._render();
     });
     onClick(".calibrate-open", (e) =>
       this._openCalibrationDialog(this._tab.slice(2))
     );
     onClick(".calibrate-apply", () => this._applyCalibration());
-    onClick(".edit-group", () => this._openGroupDialog(this._tab.slice(2)));
+    // il gruppo lo dice il pulsante: la stessa scheda ne mostra più d'uno
+    onClick(".edit-group", (e) =>
+      this._openGroupDialog(
+        e.currentTarget.getAttribute("data-cat") || this._tab.slice(2)
+      )
+    );
     onClick(".day-chip", (e) => {
       const el = e.currentTarget;
       const cat = el.getAttribute("data-cat");
@@ -1579,7 +1584,106 @@ class IrrigazioneSmartPanel extends HTMLElement {
     </div></ha-card>`;
   }
 
+  /* La pagina del *quando*, in tutte e due le modalità.
+
+     In automatico il quando sono le finestre e i giorni di ogni gruppo;
+     in programmata è il Gantt. Sono la stessa domanda con due risposte,
+     quindi stanno nella stessa pagina — e la testata dice sempre chi
+     comanda in questo momento, perché è la cosa che rende sensato o
+     inutile tutto il resto della schermata. */
   _programTab() {
+    const programmato = (this._overview.system || {}).mode === "programmato";
+    return this._programHeader(programmato) +
+      (programmato ? this._programGantt() : this._programAuto());
+  }
+
+  _programHeader(programmato) {
+    return `<ha-card><div class="inner">
+      <div class="master-row">
+        <div class="master-icon on">
+          <ha-icon icon="${programmato ? "mdi:chart-timeline" : "mdi:water-percent"}"></ha-icon>
+        </div>
+        <div class="master-main">
+          <span class="master-title">${
+            programmato ? "Decidi tu" : "Decide il bilancio idrico"
+          }</span>
+          <span class="sub">${
+            programmato
+              ? "orari e durate sono quelli che disegni qui sotto"
+              : "qui si stabilisce soltanto quando è permesso irrigare: quanta acqua serve lo calcola il sistema"
+          }</span>
+        </div>
+        ${this._button("go-settings", "Cambia")}
+      </div>
+    </div></ha-card>`;
+  }
+
+  /* Il quando della modalità automatica: un riquadro per gruppo. */
+  _programAuto() {
+    const options = this._overview.options || {};
+    const ordine = options.categories || ["prato", "aiuole", "orto", "altro"];
+    const etichette = options.category_labels || {};
+    const icone = options.category_icons || {};
+    const groups = this._overview.groups || {};
+    const zones = this._overview.zones || [];
+
+    const conLinee = ordine.filter(
+      (cat) =>
+        cat === "prato" ||
+        cat === "aiuole" ||
+        zones.some((z) => (z.category || "altro") === cat)
+    );
+
+    return conLinee
+      .map((cat) => {
+        const group = groups[cat];
+        if (!group) return "";
+        const w = group.window || {};
+        const next = this._nextRunText(group.next_run);
+        const days = group.days || [];
+        const quante = zones.filter((z) => (z.category || "altro") === cat).length;
+
+        const chips = DAY_ORDER.map(
+          (d) => `<button type="button" class="day-chip${days.includes(d) ? " on" : ""}"
+                     data-day="${d}" data-cat="${esc(cat)}">${DAY_LABELS[d]}</button>`
+        ).join("");
+
+        return `<ha-card><div class="inner">
+          <div class="card-head">
+            <ha-icon icon="${esc(icone[cat] || "mdi:sprinkler-variant")}"></ha-icon>
+            <h2>${esc(etichette[cat] || cat)}</h2>
+            <span class="sub">${quante} ${quante === 1 ? "linea" : "linee"}</span>
+            <span class="spacer"></span>
+            <button type="button" class="btn edit-group" data-cat="${esc(cat)}">Modifica</button>
+          </div>
+          <div class="row">
+            <ha-icon icon="mdi:clock-outline"></ha-icon>
+            <div class="row-main">
+              <span class="row-label">Finestra ${esc(w.label || "")}</span>
+              <span class="sub">${esc(w.quality_reason || "")}</span>
+            </div>
+            <span class="badge q-${esc(w.quality)}">${esc(w.quality || "")}</span>
+          </div>
+          <div class="row">
+            <ha-icon icon="mdi:play-circle-outline"></ha-icon>
+            <div class="row-main">
+              <span class="row-label">Avvio automatico</span>
+              <span class="sub">${
+                group.auto ? esc(next.text) : "spento: parte solo a mano"
+              }</span>
+            </div>
+            <ha-switch data-group-auto="${esc(cat)}" ${group.auto ? "checked" : ""}></ha-switch>
+          </div>
+          <div class="days-row">
+            <span class="fld-label">Giorni attivi</span>
+            <div class="day-chips">${chips}</div>
+          </div>
+        </div></ha-card>`;
+      })
+      .join("");
+  }
+
+  _programGantt() {
     const zones = this._programZones();
     if (!zones.length) {
       return `<ha-card><div class="inner"><div class="empty-state">
@@ -1913,14 +2017,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
 
     if (!group) return `<ha-alert alert-type="error">Gruppo sconosciuto.</ha-alert>`;
 
-    const w = group.window || {};
     const next = this._nextRunText(group.next_run);
-    const days = group.days || [];
-
-    const dayChips = DAY_ORDER.map(
-      (d) => `<button type="button" class="day-chip${days.includes(d) ? " on" : ""}"
-                 data-day="${d}" data-cat="${esc(category)}">${DAY_LABELS[d]}</button>`
-    ).join("");
 
     return `
       <ha-card><div class="inner">
@@ -1934,42 +2031,13 @@ class IrrigazioneSmartPanel extends HTMLElement {
           </div>
           <ha-switch data-group-toggle="${esc(category)}" ${group.enabled ? "checked" : ""}></ha-switch>
         </div>
-      </div></ha-card>
-
-      <ha-card><div class="inner">
-        <div class="card-head">
+        <div class="row">
           <ha-icon icon="mdi:calendar-clock"></ha-icon>
-          <h2>Quando irrigare</h2>
-          <span class="spacer"></span>
-          ${this._button("edit-group", "Modifica", {})}
-        </div>
-        <p class="muted small nomargin">
-          Il sistema decide da solo <b>quanta</b> acqua serve. Qui si stabilisce
-          soltanto <b>quando</b> può darla: all'orario di inizio, nei giorni
-          attivi, parte e irriga le linee sotto soglia.
-        </p>
-
-        <div class="row">
-          <ha-icon icon="mdi:clock-outline"></ha-icon>
           <div class="row-main">
-            <span class="row-label">Finestra ${esc(w.label || "")}</span>
-            <span class="sub">${esc(w.quality_reason || "")}</span>
+            <span class="row-label">Orari e giorni</span>
+            <span class="sub">si impostano nella scheda Programmazione, insieme a quelli degli altri gruppi</span>
           </div>
-          <span class="badge q-${esc(w.quality)}">${esc(w.quality || "")}</span>
-        </div>
-
-        <div class="row">
-          <ha-icon icon="mdi:play-circle-outline"></ha-icon>
-          <div class="row-main">
-            <span class="row-label">Avvio automatico</span>
-            <span class="sub">${group.auto ? esc(next.text) : "spento: parte solo a mano"}</span>
-          </div>
-          <ha-switch data-group-auto="${esc(category)}" ${group.auto ? "checked" : ""}></ha-switch>
-        </div>
-
-        <div class="days-row">
-          <span class="fld-label">Giorni attivi</span>
-          <div class="day-chips">${dayChips}</div>
+          ${this._button("go-program", "Apri")}
         </div>
       </div></ha-card>
 

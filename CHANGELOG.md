@@ -8,6 +8,19 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Modificato
+- **Il *quando* ha una pagina sua.** La scheda **Programmazione** c'è
+  sempre, in tutte e due le modalità, e tiene tutto ciò che riguarda gli
+  orari: in automatico le finestre e i giorni di ogni gruppo, uno sotto
+  l'altro; in programmata il Gantt. Sono la stessa domanda con due
+  risposte, e stavano in due posti diversi
+  - Prima gli orari erano ripetuti dentro ogni scheda di gruppo: per
+    spostare prato e aiuole si passava da due pagine, e per confrontarli
+    bisognava ricordarseli. Ora si vedono insieme, e la scheda del gruppo
+    resta quello che deve essere — le sue linee
+  - La testata dice sempre chi sta decidendo in questo momento, perché è
+    la cosa che rende sensato o inutile tutto il resto della schermata
+
 ## [1.11.0] - 2026-08-04
 
 ### Aggiunto
