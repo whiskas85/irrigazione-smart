@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-08-04
+
 ### Corretto
 - **Scrivendo l'orario di un'accensione, il campo sbatteva fuori dopo la
   prima cifra.** A ogni tasto la pagina si ridisegnava, e ridisegnare
