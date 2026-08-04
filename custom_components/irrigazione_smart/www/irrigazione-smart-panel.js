@@ -1304,19 +1304,6 @@ class IrrigazioneSmartPanel extends HTMLElement {
                    } giorni · ${zones.length} linee disponibili</span>
                  </div>
                  ${this._button("go-program", "Apri il Gantt")}
-               </div>
-               <div class="row">
-                 <ha-icon icon="mdi:weather-pouring"></ha-icon>
-                 <div class="row-main">
-                   <span class="row-label">Blocchi meteo sul programma</span>
-                   <span class="sub">
-                     salta l'accensione se piove, se ha appena piovuto, col
-                     vento oltre soglia o col gelo
-                   </span>
-                 </div>
-                 <ha-switch data-flag="program_guards" ${
-                   sys.program_guards !== false ? "checked" : ""
-                 }></ha-switch>
                </div>`
             : ""
         }
@@ -1355,20 +1342,49 @@ class IrrigazioneSmartPanel extends HTMLElement {
     });
 
     const start = sr.querySelector(".bar-start");
+    const fine = sr.querySelector(".bar-end");
     const minuti = sr.querySelector(".bar-min");
 
-    /* I campi scrivono senza far ridisegnare la pagina: l'input deve
-       restare lo stesso elemento fino a quando non lo si lascia. */
-    const applica = () => {
+    const orario = (campo) => {
+      const [h, m] = (campo.value || "").split(":").map(Number);
+      return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : null;
+    };
+
+    /* I tre campi dicono la stessa cosa in due modi: inizio più durata,
+       oppure inizio e fine. Si tiene fermo quello appena toccato e si
+       ricalcola l'altro — scrivere la fine accorcia o allunga la durata,
+       cambiare la durata sposta la fine.
+
+       Nessuno dei tre fa ridisegnare la pagina: l'input deve restare lo
+       stesso elemento finché non lo si lascia, o il fuoco se ne va. */
+    const applica = (sorgente) => {
       const { days, bars } = this._program();
       const barra = bars.find((b) => b.id === this._selBar);
       if (!barra) return false;
 
-      const [h, m] = (start.value || "").split(":").map(Number);
-      if (!Number.isFinite(h) || !Number.isFinite(m)) return false;
-      const durata = Math.max(1, Math.min(GIORNO_MIN, Number(minuti.value) || 1));
-      const inizio = Math.max(0, Math.min(GIORNO_MIN - 1, h * 60 + m));
+      const inizioLetto = orario(start);
+      if (inizioLetto === null) return false;
+      const inizio = Math.max(0, Math.min(GIORNO_MIN - 1, inizioLetto));
+
+      let durata;
+      if (sorgente === "fine") {
+        const fineLetta = orario(fine);
+        if (fineLetta === null) return false;
+        // una fine prima dell'inizio è mezzanotte scavalcata: il
+        // programma di un giorno non lo prevede, quindi si tiene il
+        // minimo invece di inventare un'accensione negativa
+        durata = Math.max(GANTT_STEP_MIN, fineLetta - inizio);
+      } else {
+        durata = Math.max(1, Number(minuti.value) || 1);
+      }
+      durata = Math.min(durata, GIORNO_MIN - inizio);
+
       if (inizio === barra.start_min && durata === barra.minutes) return false;
+
+      // i campi non toccati si riallineano subito, senza aspettare il
+      // ridisegno che qui non arriva
+      if (sorgente !== "durata") minuti.value = durata;
+      if (sorgente !== "fine") fine.value = this._hhmm(inizio + durata);
 
       this._salvaProgramma(
         {
@@ -1384,13 +1400,17 @@ class IrrigazioneSmartPanel extends HTMLElement {
       return true;
     };
 
-    [start, minuti].forEach((campo) => {
+    [
+      [start, "inizio"],
+      [fine, "fine"],
+      [minuti, "durata"],
+    ].forEach(([campo, quale]) => {
       if (!campo) return;
       // `input` mentre si scrive, `change` quando si esce: il primo tiene
       // il diagramma allineato in tempo reale, il secondo prende anche le
       // frecce del selettore orario
-      campo.addEventListener("input", applica);
-      campo.addEventListener("change", applica);
+      campo.addEventListener("input", () => applica(quale));
+      campo.addEventListener("change", () => applica(quale));
       // uscendo dal campo si ridisegna una volta sola, per rimettere in
       // ordine i pulsanti di aggancio e l'elenco ordinato
       campo.addEventListener("blur", () => this._render());
@@ -1936,6 +1956,20 @@ class IrrigazioneSmartPanel extends HTMLElement {
           <span class="fld-label">Giorni in cui il programma vale</span>
           <div class="day-chips">${chips}</div>
         </div>
+
+        <div class="row">
+          <ha-icon icon="mdi:weather-pouring"></ha-icon>
+          <div class="row-main">
+            <span class="row-label">Il meteo può fermare il programma</span>
+            <span class="sub">
+              salta l'accensione se piove, se sta per piovere, col vento
+              oltre soglia o col gelo. Spento, il programma parte comunque
+            </span>
+          </div>
+          <ha-switch data-flag="program_guards" ${
+            (this._overview.system || {}).program_guards !== false ? "checked" : ""
+          }></ha-switch>
+        </div>
       </div></ha-card>
       ${this._barEditor(zones, bars)}`;
   }
@@ -1984,6 +2018,50 @@ class IrrigazioneSmartPanel extends HTMLElement {
     }, 30000);
   }
 
+  /* Lo sfondo a fasce: quanto conviene irrigare, ora per ora.
+
+     Il giudizio non lo inventa la pagina — arriva dal motore, ed è lo
+     stesso con cui viene valutata la finestra di un gruppo. Serve a
+     rispondere all'unica domanda che ci si fa disegnando un programma:
+     *questa è una buona ora?* Sotto, la legenda dice perché. */
+  _bandeOrarie() {
+    const livelli =
+      (this._overview.options || {}).hour_quality ||
+      // di riserva, se il server è più vecchio della pagina
+      Array.from({ length: 24 }, (_, h) =>
+        h >= 3 && h < 10 ? "ottimale" : h < 3 ? "accettabile" : "sconsigliata"
+      );
+
+    const tinta = {
+      ottimale: "var(--success-color, #43a047)",
+      accettabile: "var(--warning-color, #ffa600)",
+      sconsigliata: "var(--error-color, #db4437)",
+    };
+    const stop = livelli
+      .map((livello, h) => {
+        const colore = tinta[livello] || "transparent";
+        return `${colore} ${((h / 24) * 100).toFixed(3)}% ${(((h + 1) / 24) * 100).toFixed(3)}%`;
+      })
+      .join(", ");
+
+    return `background-image: linear-gradient(to right, ${stop})`;
+  }
+
+  _ganttLegenda() {
+    return `<div class="gantt-legend">
+      <span class="legend-item"><i class="swatch q-ottimale"></i>
+        <b>03–10 ottimale</b> — il prato è già bagnato di rugiada e
+        l'acqua ha tutto il giorno per infiltrarsi</span>
+      <span class="legend-item"><i class="swatch q-accettabile"></i>
+        <b>00–03 accettabile</b> — sano per la pianta, ma allunga
+        inutilmente le ore di fogliame bagnato</span>
+      <span class="legend-item"><i class="swatch q-sconsigliata"></i>
+        <b>10–24 sconsigliata</b> — di giorno una parte dell'acqua
+        evapora prima di entrare, di sera il fogliame resta bagnato tutta
+        la notte e arrivano i funghi</span>
+    </div>`;
+  }
+
   _ganttWidth() {
     const livello = Math.max(
       0,
@@ -2020,6 +2098,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
         return `<div class="gantt-row">
           <span class="gantt-name" title="${esc(z.name)}">${esc(z.name)}</span>
           <div class="gantt-track" data-track="${esc(z.id)}">
+            <div class="gantt-bands" style="${this._bandeOrarie()}"></div>
             <div class="gantt-grid"></div>
             ${barre}
           </div>
@@ -2051,7 +2130,8 @@ class IrrigazioneSmartPanel extends HTMLElement {
         </div>
         ${righe}
         ${this._ganttNow()}
-      </div></div></div>`;
+      </div></div></div>
+      ${this._ganttLegenda()}`;
   }
 
   /* Il dettaglio della barra scelta: gli stessi valori del trascinamento,
@@ -2103,6 +2183,13 @@ class IrrigazioneSmartPanel extends HTMLElement {
           <div class="ha-field-box">
             <input class="ha-control bar-start" type="time" step="300"
                    value="${this._hhmm(barra.start_min)}">
+          </div>
+        </div>
+        <div class="ha-field grow">
+          <span class="ha-field-label">Fine</span>
+          <div class="ha-field-box">
+            <input class="ha-control bar-end" type="time" step="300"
+                   value="${this._hhmm(barra.start_min + barra.minutes)}">
           </div>
         </div>
         <div class="ha-field grow">
@@ -6367,6 +6454,19 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .gantt-now { position: absolute; top: 0; bottom: 0; width: 2px;
                    background: var(--error-color, #db4437); z-index: 2;
                    pointer-events: none; }
+      /* fasce di bontà oraria: tinte molto diluite, perché sotto ci
+         passano le barre e sopra le si deve leggere */
+      .gantt-bands { position: absolute; inset: 0; opacity: .16; }
+      .gantt-legend { display: flex; flex-direction: column; gap: 4px;
+                      margin-top: 10px; }
+      .gantt-legend .legend-item { align-items: flex-start; font-size: 12px;
+                                   line-height: 1.4; }
+      .gantt-legend .swatch { width: 12px; height: 12px; border-radius: 3px;
+                              margin-top: 2px; }
+      .swatch.q-ottimale { background: var(--success-color, #43a047); }
+      .swatch.q-accettabile { background: var(--warning-color, #ffa600); }
+      .swatch.q-sconsigliata { background: var(--error-color, #db4437); }
+
       .gantt-now.a-sinistra .gantt-now-time { left: auto; right: 3px; }
       .gantt-now-time { position: absolute; top: 2px; left: 3px;
                         font-size: 10px; font-weight: 700; line-height: 1.4;

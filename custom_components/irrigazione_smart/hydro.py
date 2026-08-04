@@ -695,6 +695,28 @@ class TimeWindow:
         return f"{fmt(self.start_min)}-{fmt(self.end_min)}"
 
 
+def hour_quality(hour: int) -> str:
+    """Quanto conviene irrigare in una certa ora del giorno.
+
+    Stessa logica di `window_quality`, applicata a un'ora sola: serve a
+    colorare il diagramma della programmazione, e deve dire le stesse
+    identiche cose della valutazione di una finestra — altrimenti lo
+    sfondo verde e il giudizio scritto finirebbero per contraddirsi.
+
+        03–10  ottimale     il prato è già bagnato di rugiada, e
+                            l'acqua ha tutto il giorno per infiltrarsi
+        00–03  accettabile  fitosanitariamente sano, ma allunga
+                            inutilmente la bagnatura pre-alba
+        10–18  sconsigliata nelle ore centrali evapora prima di entrare
+        18–24  sconsigliata il fogliame resta bagnato tutta la notte
+    """
+    if 3 <= hour < 10:
+        return "ottimale"
+    if hour < 3:
+        return "accettabile"
+    return "sconsigliata"
+
+
 def window_quality(window: TimeWindow) -> tuple[str, str]:
     """Valuta la bontà agronomica di una finestra oraria.
 

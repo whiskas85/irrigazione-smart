@@ -51,6 +51,7 @@ from .hydro import (
     RunPlan,
     TimeWindow,
     evaluate_zone,
+    hour_quality,
     resolve_zone_params,
     schedule_sequence,
     window_quality,
@@ -255,6 +256,10 @@ def _build_overview(hass: HomeAssistant) -> dict[str, Any]:
             "categories": CATEGORY_ORDER,
             "category_labels": CATEGORY_LABELS,
             "category_icons": CATEGORY_ICONS,
+            # bontà agronomica di ogni ora del giorno, per colorare il
+            # diagramma della programmazione: il giudizio è quello del
+            # motore, non una tinta scelta in pagina
+            "hour_quality": [hour_quality(h) for h in range(24)],
         },
     }
 

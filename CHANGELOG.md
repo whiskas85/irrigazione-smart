@@ -8,6 +8,25 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Aggiunto
+- **Il Gantt è colorato secondo quanto conviene irrigare a quell'ora.**
+  Lo sfondo di ogni riga porta le fasce del giorno — verde dalle 3 alle
+  10, ambra prima delle 3, rosso dalle 10 a mezzanotte — con la legenda
+  che spiega il perché di ognuna: la rugiada che ha già bagnato il
+  fogliame, le ore centrali in cui l'acqua evapora prima di entrare, la
+  sera che lascia il prato bagnato tutta la notte e chiama i funghi.
+  Il giudizio non è una tinta scelta in pagina: viene dal motore, ed è lo
+  stesso con cui valuta la finestra di un gruppo
+- **L'orario di fine è un campo, non solo una frase.** Inizio, fine e
+  durata dicono la stessa cosa in due modi: adesso ci sono tutti e tre e
+  si tengono allineati da soli — scrivi la fine e la durata si adegua,
+  cambi la durata e la fine si sposta, sposti l'inizio e la fine lo segue
+
+### Modificato
+- **I blocchi meteo del programma sono passati nella Programmazione.**
+  Non sono un'impostazione comune: riguardano il programma, e stanno
+  sotto al diagramma a cui si applicano
+
 ## [1.13.1] - 2026-08-05
 
 ### Modificato
