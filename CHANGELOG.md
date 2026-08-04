@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.14.0] - 2026-08-05
+
 ### Aggiunto
 - **Il Gantt è colorato secondo quanto conviene irrigare a quell'ora.**
   Lo sfondo di ogni riga porta le fasce del giorno — verde dalle 3 alle
