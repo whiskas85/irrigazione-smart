@@ -705,7 +705,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
           <ha-menu-button slot="navigationIcon"></ha-menu-button>
           <div slot="title" class="app-title">
             <ha-icon icon="mdi:sprinkler-variant"></ha-icon>
-            <span>Irrigazione Smart</span>
+            <span>Garden Assistant</span>
             <span class="app-version" title="Versione in esecuzione"></span>
           </div>
           <div class="tabs"></div>

@@ -8,6 +8,11 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Modificato
+- **La voce nella barra laterale si chiama Garden Assistant**, e così
+  anche l'intestazione della pagina. L'integration resta
+  `irrigazione_smart`: entità, servizi e automazioni non cambiano nome
+
 ## [1.14.0] - 2026-08-05
 
 ### Aggiunto

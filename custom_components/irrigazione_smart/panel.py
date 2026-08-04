@@ -67,7 +67,7 @@ from .store import (
 )
 
 PANEL_URL_PATH = "irrigazione-smart"
-PANEL_TITLE = "Irrigazione"
+PANEL_TITLE = "Garden Assistant"
 PANEL_ICON = "mdi:sprinkler-variant"
 COMPONENT_NAME = "irrigazione-smart-panel"
 STATIC_URL = "/irrigazione_smart_frontend"
