@@ -64,7 +64,10 @@ const GIORNO_MIN = 24 * 60;
    un'accensione da quindici minuti è una scheggia di sei pixel: si vede
    che c'è, non a che ora. Ingrandendo si scorre — è il compromesso di
    qualunque diagramma temporale — e le ore diventano leggibili. */
-const GANTT_ZOOMS = [620, 1000, 1600, 2600, 4200];
+const GANTT_MIN_PX = 620;
+const GANTT_MAX_PX = 5000;
+/* Quanto ingrandisce un colpo di pulsante o di rotellina. */
+const GANTT_ZOOM_STEP = 1.35;
 
 const DAY_LABELS = {
   mon: "Lun", tue: "Mar", wed: "Mer", thu: "Gio",
@@ -1332,12 +1335,10 @@ class IrrigazioneSmartPanel extends HTMLElement {
     // Zoom del diagramma
     sr.querySelectorAll(".zoom-in, .zoom-out").forEach((b) => {
       b.addEventListener("click", () => {
-        const verso = b.classList.contains("zoom-in") ? 1 : -1;
-        this._ganttZoom = Math.max(
-          0,
-          Math.min(GANTT_ZOOMS.length - 1, (this._ganttZoom ?? 0) + verso)
+        const dentro = b.classList.contains("zoom-in");
+        this._setGanttWidth(
+          this._ganttWidth() * (dentro ? GANTT_ZOOM_STEP : 1 / GANTT_ZOOM_STEP)
         );
-        this._render();
       });
     });
 
@@ -1441,6 +1442,106 @@ class IrrigazioneSmartPanel extends HTMLElement {
     this._bindGantt();
   }
 
+  /* Scorrimento col dito e ingrandimento a due dita.
+
+     Il diagramma si comporta come una mappa: un dito lo trascina, due
+     dita lo stringono e lo allargano attorno al punto che si tiene. È
+     l'unico modo per lavorare su una giornata intera dentro uno schermo
+     da telefono senza rinunciare né alla panoramica né al minuto.
+
+     Il pizzico si gestisce a mano perché il browser, lasciato fare,
+     ingrandirebbe tutta la pagina: qui deve allargarsi solo la
+     giornata, e le barre devono restare dove sono nel tempo. */
+  _bindGanttGesti() {
+    const sr = this.shadowRoot;
+    const scroll = sr.querySelector(".gantt-scroll");
+    const body = sr.querySelector(".gantt-body");
+    if (!scroll || !body) return;
+
+    const dita = new Map();
+    let pinch = null;
+    let pan = null;
+
+    const distanza = () => {
+      const [a, b] = [...dita.values()];
+      return Math.hypot(a.x - b.x, a.y - b.y);
+    };
+    const centro = () => {
+      const [a, b] = [...dita.values()];
+      return (a.x + b.x) / 2;
+    };
+
+    scroll.addEventListener("pointerdown", (ev) => {
+      if (ev.pointerType === "mouse") return;
+      dita.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+
+      if (dita.size === 2) {
+        // due dita: da qui in poi si ingrandisce, e qualunque tocco
+        // lungo in corso non deve più creare niente
+        this._pinch = true;
+        pan = null;
+        pinch = {
+          distanza: distanza(),
+          larghezza: this._ganttWidth(),
+          // quale istante della giornata sta sotto le dita: è il punto
+          // che deve restare fermo mentre tutto il resto si allarga
+          ancora:
+            (scroll.scrollLeft + centro() - scroll.getBoundingClientRect().left) /
+            body.getBoundingClientRect().width,
+        };
+      } else if (dita.size === 1 && !ev.target.closest(".gantt-bar")) {
+        pan = { x: ev.clientX, scroll: scroll.scrollLeft, mosso: false };
+      }
+    });
+
+    scroll.addEventListener(
+      "pointermove",
+      (ev) => {
+        if (!dita.has(ev.pointerId)) return;
+        dita.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+
+        if (pinch && dita.size >= 2) {
+          const rapporto = distanza() / (pinch.distanza || 1);
+          const larghezza = this._setGanttWidth(pinch.larghezza * rapporto, {
+            ridisegna: false,
+          });
+          body.style.minWidth = `${larghezza}px`;
+          // si rimette sotto le dita lo stesso istante di prima
+          const box = scroll.getBoundingClientRect();
+          scroll.scrollLeft =
+            pinch.ancora * body.getBoundingClientRect().width -
+            (centro() - box.left);
+          ev.preventDefault();
+          return;
+        }
+
+        if (pan) {
+          const delta = ev.clientX - pan.x;
+          if (Math.abs(delta) > 4) pan.mosso = true;
+          if (pan.mosso) {
+            scroll.scrollLeft = pan.scroll - delta;
+            ev.preventDefault();
+          }
+        }
+      },
+      { passive: false }
+    );
+
+    const molla = (ev) => {
+      dita.delete(ev.pointerId);
+      if (dita.size < 2 && pinch) {
+        pinch = null;
+        // ridisegno una volta sola a gesto finito: rifà le ore
+        // dell'asse alla nuova scala
+        this._pinch = false;
+        this._render();
+      }
+      if (dita.size === 0) pan = null;
+    };
+    scroll.addEventListener("pointerup", molla);
+    scroll.addEventListener("pointercancel", molla);
+  }
+
   /* Trascinamento delle barre.
 
      Si lavora sui minuti e non sui pixel: la traccia può essere larga
@@ -1453,6 +1554,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
     if (!gantt) return;
 
     this._startNowTicker();
+    this._bindGanttGesti();
 
     /* La rotellina scorre la giornata invece della pagina.
 
@@ -1467,16 +1569,10 @@ class IrrigazioneSmartPanel extends HTMLElement {
         (ev) => {
           if (ev.ctrlKey) {
             ev.preventDefault();
-            const verso = ev.deltaY < 0 ? 1 : -1;
-            const prima = this._ganttZoom ?? 0;
-            const dopo = Math.max(
-              0,
-              Math.min(GANTT_ZOOMS.length - 1, prima + verso)
+            const dentro = ev.deltaY < 0;
+            this._setGanttWidth(
+              this._ganttWidth() * (dentro ? GANTT_ZOOM_STEP : 1 / GANTT_ZOOM_STEP)
             );
-            if (dopo !== prima) {
-              this._ganttZoom = dopo;
-              this._render();
-            }
             return;
           }
           // niente da scorrere: si lascia scorrere la pagina
@@ -1499,23 +1595,73 @@ class IrrigazioneSmartPanel extends HTMLElement {
     };
     const scatto = (m) => Math.round(m / GANTT_STEP_MIN) * GANTT_STEP_MIN;
 
-    // nuova accensione toccando una riga vuota
+    /* Sulle righe vuote convivono tre gesti, e l'ordine conta.
+
+       Col dito il gesto più frequente è **guardare**: si scorre la
+       giornata, si allarga con due dita, e solo ogni tanto si aggiunge
+       un'accensione. Creare al primo tocco — com'era — significa
+       piazzare irrigazioni per sbaglio ogni volta che si prova a
+       muoversi. Quindi: trascinare fa scorrere, due dita ingrandiscono,
+       e per creare si tiene premuto mezzo secondo.
+
+       Col mouse non c'è ambiguità: non si scorre trascinando, quindi il
+       clic secco crea come prima. */
+    const attesa = 500;
+    const creaQui = (track, clientX) => {
+      const inizio = Math.min(GIORNO_MIN - 15, scatto(minutiDaX(track, clientX)));
+      const { days, bars } = this._program();
+      const nuova = {
+        id: `b${Date.now().toString(36)}`,
+        zone_id: track.getAttribute("data-track"),
+        start_min: inizio,
+        minutes: 15,
+      };
+      this._selBar = nuova.id;
+      this._salvaProgramma({ days, bars: [...bars, nuova] });
+    };
+
     sr.querySelectorAll(".gantt-track[data-track]").forEach((track) => {
       track.addEventListener("pointerdown", (ev) => {
         if (ev.target.closest(".gantt-bar")) return;
-        const inizio = Math.min(
-          GIORNO_MIN - 15,
-          scatto(minutiDaX(track, ev.clientX))
-        );
-        const { days, bars } = this._program();
-        const nuova = {
-          id: `b${Date.now().toString(36)}`,
-          zone_id: track.getAttribute("data-track"),
-          start_min: inizio,
-          minutes: 15,
+        if (this._pinch) return;
+
+        if (ev.pointerType === "mouse") {
+          creaQui(track, ev.clientX);
+          return;
+        }
+
+        const partenzaX = ev.clientX;
+        const partenzaY = ev.clientY;
+        let annullato = false;
+        track.classList.add("in-attesa");
+
+        const timer = setTimeout(() => {
+          if (annullato) return;
+          track.classList.remove("in-attesa");
+          creaQui(track, partenzaX);
+        }, attesa);
+
+        const basta = () => {
+          annullato = true;
+          clearTimeout(timer);
+          track.classList.remove("in-attesa");
+          track.removeEventListener("pointermove", muovi);
+          track.removeEventListener("pointerup", basta);
+          track.removeEventListener("pointercancel", basta);
         };
-        this._selBar = nuova.id;
-        this._salvaProgramma({ days, bars: [...bars, nuova] });
+        const muovi = (e) => {
+          // spostarsi vuol dire navigare, non creare
+          if (
+            Math.abs(e.clientX - partenzaX) > 8 ||
+            Math.abs(e.clientY - partenzaY) > 8
+          ) {
+            basta();
+          }
+        };
+
+        track.addEventListener("pointermove", muovi);
+        track.addEventListener("pointerup", basta);
+        track.addEventListener("pointercancel", basta);
       });
     });
 
@@ -1991,7 +2137,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
     // parte scorrevole di una manciata di pixel che non contengono
     // nulla: verso sera si mette a sinistra della linea.
     return `<div class="gantt-now${frazione > 0.85 ? " a-sinistra" : ""}" data-now
-              style="left: calc(92px + (100% - 92px) * ${frazione.toFixed(5)})">
+              style="left: calc(var(--gantt-name-w) + (100% - var(--gantt-name-w)) * ${frazione.toFixed(5)})">
         <span class="gantt-now-time">${this._hhmm(minuti)}</span>
       </div>`;
   }
@@ -2011,7 +2157,8 @@ class IrrigazioneSmartPanel extends HTMLElement {
       const ora = new Date();
       const minuti = ora.getHours() * 60 + ora.getMinutes();
       const frazione = minuti / GIORNO_MIN;
-      linea.style.left = `calc(92px + (100% - 92px) * ${frazione.toFixed(5)})`;
+      linea.style.left =
+        `calc(var(--gantt-name-w) + (100% - var(--gantt-name-w)) * ${frazione.toFixed(5)})`;
       linea.classList.toggle("a-sinistra", frazione > 0.85);
       const testo = linea.querySelector(".gantt-now-time");
       if (testo) testo.textContent = this._hhmm(minuti);
@@ -2062,12 +2209,20 @@ class IrrigazioneSmartPanel extends HTMLElement {
     </div>`;
   }
 
+  /* Larghezza della giornata, in pixel. Continua e non a scatti: col
+     pinch si stringe e si allarga come una mappa, e i pulsanti fanno
+     salti di un terzo per volta. */
   _ganttWidth() {
-    const livello = Math.max(
-      0,
-      Math.min(GANTT_ZOOMS.length - 1, this._ganttZoom ?? 0)
+    return Math.round(
+      Math.max(GANTT_MIN_PX, Math.min(GANTT_MAX_PX, this._ganttPx || GANTT_MIN_PX))
     );
-    return GANTT_ZOOMS[livello];
+  }
+
+  _setGanttWidth(px, { ridisegna = true } = {}) {
+    const prima = this._ganttWidth();
+    this._ganttPx = Math.max(GANTT_MIN_PX, Math.min(GANTT_MAX_PX, px));
+    if (ridisegna && this._ganttWidth() !== prima) this._render();
+    return this._ganttWidth();
   }
 
   _ganttHtml(zones, bars) {
@@ -2106,20 +2261,21 @@ class IrrigazioneSmartPanel extends HTMLElement {
       })
       .join("");
 
-    const livello = this._ganttZoom ?? 0;
     // La giornata intera in trecento punti darebbe barre da sei pixel:
     // sotto una certa larghezza si scorre, come in qualunque Gantt.
     return `<div class="gantt-tools">
         <span class="sub">Ingrandimento</span>
         <button type="button" class="btn icon zoom-out"${
-          livello === 0 ? " disabled" : ""
+          larghezza <= GANTT_MIN_PX ? " disabled" : ""
         } title="Riduci"><ha-icon icon="mdi:magnify-minus-outline"></ha-icon></button>
         <button type="button" class="btn icon zoom-in"${
-          livello >= GANTT_ZOOMS.length - 1 ? " disabled" : ""
+          larghezza >= GANTT_MAX_PX ? " disabled" : ""
         } title="Ingrandisci"><ha-icon icon="mdi:magnify-plus-outline"></ha-icon></button>
         <span class="spacer"></span>
         <span class="sub">${
-          livello === 0 ? "giornata intera" : `${(GANTT_ZOOMS[livello] / 620).toFixed(1)}×`
+          larghezza <= GANTT_MIN_PX
+            ? "giornata intera"
+            : `${(larghezza / GANTT_MIN_PX).toFixed(1)}×`
         }</span>
       </div>
       <div class="gantt"><div class="gantt-scroll"><div class="gantt-body"
@@ -6442,7 +6598,8 @@ class IrrigazioneSmartPanel extends HTMLElement {
                    text-align: center; font-variant-numeric: tabular-nums;
                    color: var(--primary-text-color); }
 
-      .gantt { margin-top: 8px; border: 1px solid var(--divider-color);
+      .gantt { --gantt-name-w: 92px; margin-top: 8px;
+               border: 1px solid var(--divider-color);
                border-radius: 10px; overflow: hidden; }
       .gantt-scroll { overflow-x: auto; overscroll-behavior-x: contain; }
       /* sotto questa larghezza le barre diventano schegge: si scorre */
@@ -6478,7 +6635,12 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .gantt-row:first-child { border-top: none; }
       /* il nome resta agganciato a sinistra mentre la giornata scorre:
          senza, si finisce a guardare barre di cui non si sa più la linea */
-      .gantt-name { flex: 0 0 92px; padding: 8px 10px; font-size: 13px;
+      /* La colonna dei nomi è larga esattamente quanto dice la variabile,
+         padding e bordo compresi: la linea di adesso parte da lì con lo
+         stesso numero, e senza box-sizing i venti pixel di padding la
+         spostavano indietro di quasi un'ora. */
+      .gantt-name { flex: 0 0 var(--gantt-name-w); box-sizing: border-box;
+                    padding: 8px 10px; font-size: 13px;
                     display: flex; align-items: center; overflow: hidden;
                     text-overflow: ellipsis; white-space: nowrap;
                     position: sticky; left: 0; z-index: 3;
@@ -6487,6 +6649,10 @@ class IrrigazioneSmartPanel extends HTMLElement {
                     border-right: 1px solid var(--divider-color); }
       .gantt-track { position: relative; flex: 1 1 auto; height: 44px;
                      touch-action: pan-y; cursor: copy; }
+      /* mentre si tiene premuto, la riga si accende: dice che sta per
+         nascere un'accensione, e che basta muoversi per non farla */
+      .gantt-track.in-attesa { background:
+        color-mix(in srgb, var(--primary-color) 14%, transparent); }
       .gantt-head .gantt-track { height: 22px; cursor: default; }
       .gantt-head { background: var(--secondary-background-color); }
       .gantt-tick { position: absolute; top: 3px; font-size: 10px;

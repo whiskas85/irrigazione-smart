@@ -8,6 +8,29 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Corretto
+- **La linea di adesso era indietro di quasi un'ora.** Partiva contando
+  92 pixel di colonna dei nomi, ma quella colonna ne misurava 113: i
+  venti pixel di margine interno non erano compresi nella larghezza
+  dichiarata. Su una giornata larga 620 punti fanno **48 minuti**, ed è
+  il motivo per cui un'accensione delle 04 sembrava già passata alle
+  05:07. Adesso la colonna e la linea leggono lo stesso numero
+
+### Modificato
+- **Col dito, muoversi viene prima di creare.** Toccando una riga vuota
+  nasceva subito un'accensione: sullo schermo di un telefono, dove il
+  gesto più frequente è scorrere per guardare, significava piazzare
+  irrigazioni per sbaglio a ogni tentativo di navigare. Ora **si tiene
+  premuto mezzo secondo** — la riga si accende per dirlo, e basta
+  spostarsi per annullare. Col mouse il clic secco continua a creare,
+  perché lì non c'è nessuna ambiguità
+
+### Aggiunto
+- **Pizzico per ingrandire e trascinamento per scorrere**, come su una
+  mappa: due dita allargano la giornata attorno al punto che si tiene
+  fermo, un dito la fa scorrere. L'ingrandimento non è più a scatti ma
+  continuo, da giornata intera fino a otto volte
+
 ## [1.14.1] - 2026-08-05
 
 ### Modificato
