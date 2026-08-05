@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.17.1] - 2026-08-05
+
 ### Modificato
 - **Dalla Programmazione si entra nel manuale, non se ne esce.** Il
   pulsante per tornare all'automatica non compare più quando il manuale
