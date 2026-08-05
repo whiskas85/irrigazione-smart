@@ -43,7 +43,7 @@ from .const import (
     SIGNAL_ZONES_CHANGED,
     zone_category,
 )
-from .executor import get_executor
+from .executor import OPEN_STATES, get_executor
 from .hydro import (
     EMITTER_EFFICIENCY,
     SOIL_PROPS,
@@ -127,6 +127,14 @@ def _remove_zone_device(hass: HomeAssistant, zone_id: str) -> None:
         registry.async_remove_device(device.id)
 
 
+def _valve_open(hass: HomeAssistant, entity_id: str | None) -> bool:
+    """True se la valvola della linea risulta aperta adesso."""
+    if not entity_id:
+        return False
+    state = hass.states.get(entity_id)
+    return state is not None and state.state in OPEN_STATES
+
+
 def _zone_computed(zone: dict[str, Any], params, plan: RunPlan) -> dict[str, Any]:
     """Valori derivati di una zona, già calcolati con il motore idrico."""
     deficit = float(zone.get("deficit_mm") or 0.0)
@@ -202,6 +210,11 @@ def _build_overview(hass: HomeAssistant) -> dict[str, Any]:
             {
                 **zone,
                 "category": category,
+                # Se la valvola è aperta lo dice la valvola, non il nostro
+                # motore: può averla aperta un'automazione di casa, il
+                # pulsante sul muro o l'app del produttore, e da quel
+                # momento quell'area sta ricevendo acqua comunque.
+                "valve_open": _valve_open(hass, zone.get("valve_entity")),
                 "computed": _zone_computed(zone, params, plan),
             }
         )

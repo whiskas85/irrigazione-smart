@@ -8,6 +8,33 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Corretto
+- **Le aree non si accendevano più mentre irrigavano.** Il pallino
+  azzurro e le aree colorate della mappa guardavano lo stato del *nostro*
+  motore, e col programma manuale quel motore non gira: apre e chiude
+  valvole a ogni giro dell'orologio, senza una sequenza in corso da
+  dichiarare. Adesso chi sta bagnando lo dice la valvola
+  - Vale anche per l'acqua che apriamo noi: se qualcuno apre una linea da
+    fuori — un'automazione di casa, il pulsante sul muro, l'app del
+    produttore — l'area si accende lo stesso, perché l'acqua sta uscendo
+    davvero. E si spegne quando la valvola si chiude, non quando lo
+    decidiamo noi
+  - Reagisce all'istante, senza aspettare il giro di aggiornamento: lo
+    stato delle valvole arriva da Home Assistant appena cambia
+  - Più linee insieme si accendono insieme, che è il caso normale quando
+    si sovrappongono le barre del Gantt
+- **Il Gantt perdeva lo scorrimento e tornava a mezzanotte.** Ogni
+  ridisegno — un giro di aggiornamento, un salvataggio — ricreava
+  l'elemento che stava scorrendo, e la giornata ripartiva da capo mentre
+  si stava lavorando sulle sei del mattino. Ora la posizione si conserva,
+  e mentre si trascina una barra o si ingrandisce col pizzico il corpo
+  della pagina non viene più rifatto
+
+### Aggiunto
+- **Nel Gantt la riga di una linea che sta bagnando si accende** e pulsa,
+  come il pallino della dashboard: guardando il programma si vede a che
+  punto è davvero l'impianto, non solo cosa era previsto
+
 ## [1.15.0] - 2026-08-05
 
 ### Corretto

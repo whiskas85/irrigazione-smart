@@ -209,8 +209,10 @@ const isBlocked = (reason) => !!reason && BLOCKING.some((b) => reason.startsWith
      verde   = tutto a posto
    La soglia "grave" non è arbitraria: oltre quel punto la pianta è in
    stress prolungato, non solo assetata. */
-function zoneStatus(zone, runningZoneId) {
-  if (runningZoneId && zone.id === runningZoneId) {
+function zoneStatus(zone, wateringIds) {
+  // più di una linea può bagnare insieme: col programma manuale è
+  // proprio il caso che si va a cercare, sovrapponendo le barre
+  if ((wateringIds || []).includes(zone.id)) {
     return { level: "watering", label: "in irrigazione" };
   }
   if (!zone.enabled) return { level: "off", label: "disattivata" };
@@ -265,6 +267,9 @@ class IrrigazioneSmartPanel extends HTMLElement {
       return;
     }
     this._updateLiveValues();
+    // una valvola che si apre o si chiude cambia cosa sta bagnando, e
+    // arriva qui prima che a qualunque giro di aggiornamento
+    this._updateWatering();
     this._updateMenuButton();
     // le card Lovelace si aggiornano da sole, ma solo se ricevono `hass`
     (this._cardEls || []).forEach((card) => {
@@ -308,7 +313,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
       // le variazioni minime non valgono un ridisegno dell'intera pagina
       if (Math.abs(larghezza - (this._chartWidth || 0)) < 24) return;
       this._chartWidth = larghezza;
-      if (this._isTyping() || this._mapBusy()) return;
+      if (this._isTyping() || this._mapBusy() || this._ganttBusy()) return;
       if (this.shadowRoot.querySelector("ha-dialog, .dlg-fallback")) return;
       this._render();
     });
@@ -352,7 +357,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
 
       // Se l'utente sta scrivendo, ridisegnare tutto gli toglierebbe il
       // campo da sotto le dita: si aggiorna solo la lista.
-      if (this._isTyping() || this._mapBusy()) {
+      if (this._isTyping() || this._mapBusy() || this._ganttBusy()) {
         if (logChanged) this._updateLogList();
         return;
       }
@@ -527,7 +532,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
   _softRender() {
     clearTimeout(this._softTimer);
     this._softTimer = setTimeout(() => {
-      if (this._isTyping() || this._mapBusy()) return;
+      if (this._isTyping() || this._mapBusy() || this._ganttBusy()) return;
       if (this.shadowRoot.querySelector("ha-dialog, .dlg-fallback")) return;
       this._render();
     }, 700);
@@ -547,14 +552,85 @@ class IrrigazioneSmartPanel extends HTMLElement {
      l'impianto aspetta, e in quei minuti nessuna valvola è aperta.
      Segnare comunque "in irrigazione" la linea che toccherà dopo faceva
      lampeggiare la linea sbagliata per mezz'ora. */
-  _wateringZoneId() {
+  /* Le linee che stanno bagnando adesso.
+
+     Sono più d'una col programma manuale, dove due barre sovrapposte
+     aprono due valvole insieme: chi disegna quelle sovrapposizioni deve
+     vederle accese entrambe sulla mappa. */
+  _wateringZoneIds() {
     const running = (this._overview && this._overview.running) || {};
-    // durante la taratura la valvola è aperta, ma non si sta irrigando:
+    // Durante la taratura la valvola è aperta ma non si sta irrigando:
     // sono due minuti di misura, e chiamarla irrigazione mentirebbe sia
-    // al pallino sia al bilancio
-    if (!running.active || running.mode === "taratura") return null;
-    if (running.phase !== "irrigazione") return null;
-    return running.zone_id || null;
+    // al pallino sia al bilancio.
+    if (running.active && running.mode === "taratura") return [];
+
+    /* Chi sta bagnando lo dice la valvola, non il nostro motore.
+
+       Se qualcuno apre una linea da fuori — un'automazione di casa, il
+       pulsante sul muro, l'app del produttore — l'acqua esce lo stesso,
+       e la pagina che continuasse a mostrare quell'area spenta starebbe
+       raccontando una cosa falsa. Lo stesso vale alla chiusura: si
+       spegne quando la valvola si spegne, non quando lo decidiamo noi. */
+    const aperte = (this._overview.zones || [])
+      .filter((z) => this._valvolaAperta(z))
+      .map((z) => z.id);
+
+    // il piano in corso resta come rinforzo: copre l'istante fra il
+    // comando e la conferma della valvola
+    if (running.active && running.phase === "irrigazione") {
+      (running.zone_ids || [running.zone_id]).forEach((id) => {
+        if (id && !aperte.includes(id)) aperte.push(id);
+      });
+    }
+    return aperte;
+  }
+
+  /* Stato vero della valvola di una linea, letto adesso da Home
+     Assistant. Ricade sul dato del server quando l'entità non è
+     leggibile — un riavvio, un'entità appena rinominata. */
+  _valvolaAperta(zone) {
+    const entity = zone && zone.valve_entity;
+    if (!entity) return false;
+    const state = this._hass && this._hass.states[entity];
+    if (!state) return !!zone.valve_open;
+    return ["on", "open", "opening"].includes(state.state);
+  }
+
+  /* True mentre si sta trascinando o ingrandendo il Gantt: ridisegnare
+     in quel momento toglierebbe la barra da sotto le dita, e farebbe
+     tornare la giornata a mezzanotte. */
+  _ganttBusy() {
+    return this._tab === "programma" && (!!this._pinch || !!this._barraInMano);
+  }
+
+  /* Accende e spegne le aree senza ridisegnare tutta la pagina.
+
+     Le valvole cambiano stato mentre si guarda: aspettare il giro di
+     aggiornamento vorrebbe dire vedere un'area accendersi mezzo minuto
+     dopo che l'acqua è uscita. */
+  _updateWatering() {
+    const attuali = this._wateringZoneIds().sort().join(",");
+    if (attuali === this._lastWatering) return;
+    this._lastWatering = attuali;
+
+    // le righe del Gantt si accendono da sole, senza rifare il diagramma
+    const bagnano = attuali ? attuali.split(",") : [];
+    this.shadowRoot.querySelectorAll("[data-row-zone]").forEach((riga) => {
+      riga.classList.toggle(
+        "bagna",
+        bagnano.includes(riga.getAttribute("data-row-zone"))
+      );
+    });
+
+    if (this._tab === "mappa") {
+      this._repaintMap();
+      return;
+    }
+    // altrove cambiano pallini e badge: si rifà il corpo, ma solo se
+    // nessuno ha le mani sulla pagina
+    if (this._isTyping() || this._mapBusy() || this._ganttBusy()) return;
+    if (this.shadowRoot.querySelector("ha-dialog, .dlg-fallback")) return;
+    if (this._tab !== "programma") this._render();
   }
 
   /* Stato della batteria di una linea, se ne ha una.
@@ -1556,13 +1632,31 @@ class IrrigazioneSmartPanel extends HTMLElement {
     this._startNowTicker();
     this._bindGanttGesti();
 
+    /* Lo scorrimento della giornata sopravvive al ridisegno.
+
+       Il corpo della pagina viene rifatto quando cambiano i dati — ogni
+       giro di aggiornamento, ogni salvataggio — e con esso sparisce
+       l'elemento che stava scorrendo: si tornava a mezzanotte mentre si
+       stava lavorando sulle sei del mattino. La posizione si tiene da
+       parte e si rimette. */
+    const scroll = sr.querySelector(".gantt-scroll");
+    if (scroll) {
+      if (this._ganttScroll) scroll.scrollLeft = this._ganttScroll;
+      scroll.addEventListener(
+        "scroll",
+        () => {
+          this._ganttScroll = scroll.scrollLeft;
+        },
+        { passive: true }
+      );
+    }
+
     /* La rotellina scorre la giornata invece della pagina.
 
        È il verso naturale in un diagramma temporale: il tempo va in
        orizzontale, e chi guarda un Gantt gira la rotellina per andare
        avanti nelle ore, non per uscire dal diagramma. Col tasto
        control ingrandisce, come in qualunque mappa. */
-    const scroll = sr.querySelector(".gantt-scroll");
     if (scroll) {
       scroll.addEventListener(
         "wheel",
@@ -1684,6 +1778,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
         let durata = durata0;
 
         el.setPointerCapture(ev.pointerId);
+        this._barraInMano = true;
         const testo = el.querySelector(".gantt-bar-text");
 
         const muovi = (e) => {
@@ -1706,6 +1801,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
         };
 
         const molla = () => {
+          this._barraInMano = false;
           el.removeEventListener("pointermove", muovi);
           el.removeEventListener("pointerup", molla);
           el.removeEventListener("pointercancel", molla);
@@ -2227,6 +2323,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
 
   _ganttHtml(zones, bars) {
     const larghezza = this._ganttWidth();
+    const bagnano = this._wateringZoneIds();
     // più si ingrandisce, più fitte possono stare le ore senza pestarsi
     const passo = larghezza >= 2600 ? 1 : larghezza >= 1000 ? 2 : 3;
     const ore = [];
@@ -2250,7 +2347,10 @@ class IrrigazioneSmartPanel extends HTMLElement {
                     </div>`;
           })
           .join("");
-        return `<div class="gantt-row">
+        // la riga si accende mentre quella linea sta davvero bagnando,
+        // qualunque cosa l'abbia aperta
+        const bagna = bagnano.includes(z.id) ? " bagna" : "";
+        return `<div class="gantt-row${bagna}" data-row-zone="${esc(z.id)}">
           <span class="gantt-name" title="${esc(z.name)}">${esc(z.name)}</span>
           <div class="gantt-track" data-track="${esc(z.id)}">
             <div class="gantt-bands" style="${this._bandeOrarie()}"></div>
@@ -3725,7 +3825,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
     const rowFor = (z) => {
       const c = z.computed || {};
       const plan = c.plan || {};
-      const st = zoneStatus(z, this._wateringZoneId());
+      const st = zoneStatus(z, this._wateringZoneIds());
       const deficit = Number(z.deficit_mm || 0);
       const thr = Number(c.trigger_threshold_mm || 0);
       const busy = !!running.active;
@@ -4072,7 +4172,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
   _areaStatus(area) {
     const zone = this._areaZone(area);
     if (!zone) return { level: "none", label: "nessuna linea collegata" };
-    return zoneStatus(zone, this._wateringZoneId());
+    return zoneStatus(zone, this._wateringZoneIds());
   }
 
   /* Nome dell'area: il suo, se gliene è stato dato uno, altrimenti
@@ -6653,6 +6753,19 @@ class IrrigazioneSmartPanel extends HTMLElement {
          nascere un'accensione, e che basta muoversi per non farla */
       .gantt-track.in-attesa { background:
         color-mix(in srgb, var(--primary-color) 14%, transparent); }
+
+      /* Linea che sta bagnando adesso: il nome si accende e pulsa, come
+         il pallino azzurro della dashboard. Vale comunque sia stata
+         aperta la valvola — dal programma, a mano, o da un'automazione
+         che non ci riguarda. */
+      .gantt-row.bagna .gantt-name {
+        background: color-mix(in srgb, var(--info-color, var(--primary-color)) 26%, transparent);
+        font-weight: 600; }
+      .gantt-row.bagna .gantt-name::before {
+        content: ""; width: 8px; height: 8px; border-radius: 50%;
+        margin-right: 6px; flex: 0 0 auto;
+        background: var(--info-color, var(--primary-color));
+        animation: pulse 1.6s ease-in-out infinite; }
       .gantt-head .gantt-track { height: 22px; cursor: default; }
       .gantt-head { background: var(--secondary-background-color); }
       .gantt-tick { position: absolute; top: 3px; font-size: 10px;

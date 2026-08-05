@@ -131,6 +131,27 @@ class IrrigationExecutor:
     def status(self) -> dict[str, Any]:
         """Stato corrente, per pagina ed entità."""
         if not self.running:
+            # Il programma manuale non è un task che gira: apre e chiude
+            # valvole a ogni giro dell'orologio. Ma l'acqua che esce è
+            # acqua che esce, e la pagina deve poterlo dire — senza
+            # questo, in modalità programmata le aree della mappa non si
+            # coloravano mai e i pallini restavano spenti.
+            aperte = list(self._program_started)
+            if aperte:
+                nomi = [
+                    (self._store.zones.get(zid) or {}).get("name") or "Linea"
+                    for zid in aperte
+                ]
+                return {
+                    "active": True,
+                    "mode": "programma",
+                    "phase": "irrigazione",
+                    "zone_ids": aperte,
+                    # la prima resta per chi legge una linea sola
+                    "zone_id": aperte[0],
+                    "zone_name": " + ".join(nomi),
+                    "insieme": len(aperte),
+                }
             return {"active": False}
 
         state = dict(self._state)
