@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.15.0] - 2026-08-05
+
 ### Corretto
 - **La linea di adesso era indietro di quasi un'ora.** Partiva contando
   92 pixel di colonna dei nomi, ma quella colonna ne misurava 113: i
