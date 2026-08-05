@@ -8,6 +8,13 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Modificato
+- **Dalla Programmazione si entra nel manuale, non se ne esce.** Il
+  pulsante per tornare all'automatica non compare più quando il manuale
+  è già attivo: chi ha appena disegnato un programma non deve trovarsi a
+  un dito dal comando che lo rende inerte. Quella scelta si prende dalle
+  impostazioni, dove si va apposta
+
 ## [1.17.0] - 2026-08-05
 
 ### Corretto

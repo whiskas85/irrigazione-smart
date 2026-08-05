@@ -2084,12 +2084,17 @@ class IrrigazioneSmartPanel extends HTMLElement {
               : "qui si stabilisce soltanto quando è permesso irrigare: quanta acqua serve lo calcola il sistema"
           }</span>
         </div>
-        <button type="button" class="btn primary mode-switch"
-                data-mode="${programmato ? "automatico" : "programmato"}">${
+        ${
+          // Il ritorno all'automatica non sta qui: da questa pagina si
+          // entra nel manuale, non se ne esce. Chi ha disegnato un
+          // programma non deve trovarsi a un dito di distanza dal
+          // pulsante che lo rende inerte — quella scelta si prende dalle
+          // impostazioni, dove si va apposta.
           programmato
-            ? "Torna all'automatica"
-            : "Passa alla programmazione manuale"
-        }</button>
+            ? ""
+            : `<button type="button" class="btn primary mode-switch"
+                 data-mode="programmato">Passa alla programmazione manuale</button>`
+        }
       </div>
     </div></ha-card>`;
   }
