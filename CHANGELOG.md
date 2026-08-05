@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.17.0] - 2026-08-05
+
 ### Corretto
 - **Le entità dicevano che non stava irrigando mentre l'acqua usciva.**
   Il 5 agosto la valvola della linea 3 è rimasta aperta dalle 05:10 alle

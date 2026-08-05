@@ -29,7 +29,7 @@ const SENSORS = [
    finché Home Assistant non riparte. La pagina sa quindi di funzioni che
    il server non ha ancora, e le chiamate rispondono 404 senza che si
    capisca perché. */
-const PANEL_VERSION = "1.16.0";
+const PANEL_VERSION = "1.17.0";
 
 const BASE_TABS = [
   { id: "dashboard", label: "Dashboard", icon: "mdi:view-dashboard-outline" },
