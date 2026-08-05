@@ -24,10 +24,10 @@ from homeassistant.util import dt as dt_util
 
 from .const import CATEGORY_LABELS, CATEGORY_ORDER, DOMAIN, SIGNAL_ZONES_CHANGED
 from .entity import IrrigazioneEntity, IrrigazioneZoneEntity, system_device_info
-from .executor import get_executor
 from .hydro import evaluate_zone, resolve_zone_params
 from .scheduler import get_scheduler
 from .store import IrrigazioneStore
+from .valves import zone_is_watering
 
 
 async def async_setup_entry(
@@ -165,9 +165,9 @@ class ZoneStateSensor(IrrigazioneZoneEntity, SensorEntity):
         if zone is None:
             return None
 
-        executor = get_executor(self.hass)
-        stato = executor.status() if executor else {}
-        if stato.get("active") and stato.get("zone_id") == self._zone_id:
+        # la valvola è l'unica fonte onesta: chiunque l'abbia aperta,
+        # quella linea sta ricevendo acqua
+        if zone_is_watering(self.hass, zone):
             return "in_irrigazione"
         if not zone.get("enabled", True):
             return "disattivata"

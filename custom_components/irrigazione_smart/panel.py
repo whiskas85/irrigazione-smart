@@ -68,8 +68,9 @@ from .store import (
 
 PANEL_URL_PATH = "irrigazione-smart"
 PANEL_TITLE = "Garden Assistant"
-PANEL_ICON = "mdi:sprinkler-variant"
+PANEL_ICON = "garden:assistant"
 COMPONENT_NAME = "irrigazione-smart-panel"
+ICONSET_NAME = "garden-assistant-icons"
 STATIC_URL = "/irrigazione_smart_frontend"
 
 _HTTP_FLAG = "_http_registered"
@@ -1141,9 +1142,13 @@ def _asset_fingerprint(www_dir: Path, version: str) -> str:
     resterebbe in cache, costringendo l'utente al ricaricamento forzato,
     che sul telefono è scomodo o impossibile.
     """
+    impronta = hashlib.sha256()
     try:
-        content = (www_dir / f"{COMPONENT_NAME}.js").read_bytes()
-        digest = hashlib.sha256(content).hexdigest()[:10]
+        # anche l'insieme di icone: cambiarlo senza cambiare l'indirizzo
+        # lascerebbe la vecchia icona nella cache del browser
+        for nome in (f"{COMPONENT_NAME}.js", f"{ICONSET_NAME}.js"):
+            impronta.update((www_dir / nome).read_bytes())
+        digest = impronta.hexdigest()[:10]
     except OSError:
         digest = "0"
     return f"{version}.{digest}"
@@ -1205,6 +1210,16 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
             str(integration.version),
         )
         domain_data["panel_version"] = str(integration.version)
+
+        # L'icona della barra laterale è la nostra, non una mdi che le
+        # somiglia: si registra come tracciato SVG in un insieme di
+        # icone, così eredita il colore della voce — grigia a riposo,
+        # accesa quando è la pagina aperta. Va caricata su *ogni* pagina
+        # del frontend, perché la barra laterale c'è anche quando il
+        # pannello non è aperto.
+        frontend.add_extra_js_url(
+            hass, f"{STATIC_URL}/{ICONSET_NAME}.js?v={fingerprint}"
+        )
 
         await panel_custom.async_register_panel(
             hass,

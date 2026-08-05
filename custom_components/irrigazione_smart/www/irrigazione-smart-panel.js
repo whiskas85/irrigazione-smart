@@ -367,6 +367,18 @@ class IrrigazioneSmartPanel extends HTMLElement {
         this._repaintMap();
         return;
       }
+      /* Sulla programmazione non si ridisegna per conto proprio.
+
+         Il Gantt dipende dal programma e dall'elenco delle linee, non
+         dai numeri che cambiano ogni giro — deficit, meteo, minuti
+         erogati. Rifare il corpo per quelli buttava via la posizione
+         della pagina, che sul telefono vuol dire ritrovarsi in cima
+         mentre si stava sistemando una barra. Le linee che bagnano si
+         accendono comunque, da sole. */
+      if (this._tab === "programma") {
+        this._updateWatering();
+        return;
+      }
       if (changed || logChanged) this._render();
     } catch (_e) {
       /* un errore di rete transitorio non deve svuotare la pagina */
@@ -783,7 +795,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
         <ha-top-app-bar-fixed>
           <ha-menu-button slot="navigationIcon"></ha-menu-button>
           <div slot="title" class="app-title">
-            <ha-icon icon="mdi:sprinkler-variant"></ha-icon>
+            <ha-icon icon="garden:assistant"></ha-icon>
             <span>Garden Assistant</span>
             <span class="app-version" title="Versione in esecuzione"></span>
           </div>
@@ -6316,6 +6328,11 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .app-version { font-size: 12px; font-weight: 400; opacity: .7;
                      padding: 2px 8px; border-radius: 10px;
                      background: rgba(255,255,255,.15); }
+      /* Sul telefono il titolo è già stretto: il numero di versione
+         serve a chi verifica un aggiornamento, non a chi irriga. */
+      @media (max-width: 700px) {
+        .app-version { font-size: 10px; padding: 1px 5px; opacity: .55; }
+      }
 
       /* Le schede restano in cima mentre il contenuto scorre: sono la
          navigazione, e doverla riesumare risalendo una pagina lunga di
@@ -6698,7 +6715,7 @@ class IrrigazioneSmartPanel extends HTMLElement {
                    text-align: center; font-variant-numeric: tabular-nums;
                    color: var(--primary-text-color); }
 
-      .gantt { --gantt-name-w: 92px; margin-top: 8px;
+      .gantt { --gantt-name-w: 124px; margin-top: 8px;
                border: 1px solid var(--divider-color);
                border-radius: 10px; overflow: hidden; }
       .gantt-scroll { overflow-x: auto; overscroll-behavior-x: contain; }
@@ -6761,11 +6778,14 @@ class IrrigazioneSmartPanel extends HTMLElement {
       .gantt-row.bagna .gantt-name {
         background: color-mix(in srgb, var(--info-color, var(--primary-color)) 26%, transparent);
         font-weight: 600; }
-      .gantt-row.bagna .gantt-name::before {
-        content: ""; width: 8px; height: 8px; border-radius: 50%;
-        margin-right: 6px; flex: 0 0 auto;
-        background: var(--info-color, var(--primary-color));
-        animation: pulse 1.6s ease-in-out infinite; }
+      /* Niente pallino qui dentro: la colonna è stretta e ogni pixel
+         speso in decorazione è una lettera in meno del nome. Che la
+         linea stia bagnando lo dice già lo sfondo acceso, che pulsa. */
+      .gantt-row.bagna .gantt-name { animation: pulse-sfondo 2s ease-in-out infinite; }
+      @keyframes pulse-sfondo {
+        0%, 100% { background: color-mix(in srgb, var(--info-color, var(--primary-color)) 26%, transparent); }
+        50% { background: color-mix(in srgb, var(--info-color, var(--primary-color)) 12%, transparent); }
+      }
       .gantt-head .gantt-track { height: 22px; cursor: default; }
       .gantt-head { background: var(--secondary-background-color); }
       .gantt-tick { position: absolute; top: 3px; font-size: 10px;

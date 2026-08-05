@@ -17,6 +17,7 @@ from .panel import async_remove_panel, async_setup_panel, async_setup_store
 from .recovery import async_recover_interrupted_run
 from .scheduler import IrrigationScheduler
 from .services import async_setup_services
+from .valves import ValveWatcher
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -49,6 +50,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     scheduler = IrrigationScheduler(hass, store)
     hass.data[DOMAIN]["scheduler"] = scheduler
     entry.async_on_unload(scheduler.async_start())
+
+    # Le valvole si ascoltano sempre, non solo quando siamo noi ad
+    # aprirle: se una linea si accende da fuori, entità e pagina devono
+    # dirlo nell'istante in cui succede.
+    watcher = ValveWatcher(hass, store)
+    hass.data[DOMAIN]["valves"] = watcher
+    entry.async_on_unload(watcher.async_start())
 
     # Un'irrigazione interrotta da un riavvio va ritrovata e messa in
     # sicurezza. Si aspetta che Home Assistant sia avviato del tutto:

@@ -8,6 +8,34 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+### Corretto
+- **Le entità dicevano che non stava irrigando mentre l'acqua usciva.**
+  Il 5 agosto la valvola della linea 3 è rimasta aperta dalle 05:10 alle
+  05:40; il sensore *in irrigazione* si è acceso alle 05:38. Ventisette
+  minuti d'acqua invisibili, perché quelle entità leggevano lo stato del
+  nostro esecutore invece della valvola. Ora la valvola viene ascoltata
+  davvero: `binary_sensor.<linea>_in_irrigazione` e
+  `sensor.<linea>_stato` si accendono nell'istante in cui si apre,
+  chiunque l'abbia aperta — noi, un'automazione di casa, il pulsante sul
+  muro
+- **Sul telefono la programmazione risaliva in cima da sola.** Ogni giro
+  di aggiornamento rifaceva il corpo della pagina per numeri che il
+  Gantt non mostra nemmeno — deficit, meteo — e la posizione andava
+  persa mentre si sistemava una barra. Adesso quella scheda non si
+  ridisegna da sé: le linee che bagnano si accendono comunque
+- **Il nome della linea non ci stava.** La colonna era larga 92 punti e
+  «Sprinkler Line 2» finiva tagliato; il pallino che segnalava
+  l'irrigazione si mangiava altre lettere. La colonna è più larga, il
+  pallino è sparito e al suo posto è lo sfondo del nome a pulsare
+
+### Modificato
+- **L'icona nella barra laterale è la nostra casetta**, non più una mdi
+  che le somigliava. È registrata come tracciato, non come immagine:
+  così resta grigia come le voci vicine e si accende solo quando è la
+  pagina aperta
+- Sul telefono il numero di versione accanto al titolo è più piccolo e
+  più discreto: serve a chi verifica un aggiornamento, non a chi irriga
+
 ## [1.16.0] - 2026-08-05
 
 ### Corretto

@@ -24,6 +24,7 @@ from .const import DOMAIN, SIGNAL_ZONES_CHANGED
 from .entity import IrrigazioneEntity, IrrigazioneZoneEntity, system_device_info
 from .executor import get_executor
 from .store import IrrigazioneStore
+from .valves import watering_zone_ids, zone_is_watering
 
 
 async def async_setup_entry(
@@ -74,6 +75,10 @@ class SystemRunningSensor(IrrigazioneEntity, BinarySensorEntity):
 
     @property
     def is_on(self) -> bool:
+        # basta una valvola aperta: l'acqua sta uscendo comunque, anche
+        # se non siamo stati noi ad aprirla
+        if watering_zone_ids(self.hass, self._store):
+            return True
         return bool(self._status().get("active"))
 
     @property
@@ -116,12 +121,13 @@ class ZoneWateringSensor(IrrigazioneZoneEntity, BinarySensorEntity):
 
     @property
     def is_on(self) -> bool:
-        stato = self._status()
-        return bool(
-            stato.get("active")
-            and stato.get("zone_id") == self._zone_id
-            and stato.get("phase") == "irrigazione"
-        )
+        """Acceso quando la valvola di questa linea è aperta.
+
+        Non si guarda cosa sta facendo il nostro esecutore: una valvola
+        aperta da un'automazione di casa bagna esattamente come una
+        aperta da noi, e per il prato non c'è differenza.
+        """
+        return zone_is_watering(self.hass, self.zone)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
