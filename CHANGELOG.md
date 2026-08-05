@@ -8,6 +8,8 @@ rilascio, `scripts/bump.py` le promuove alla nuova versione con la data.
 
 ## [Unreleased]
 
+## [1.16.0] - 2026-08-05
+
 ### Corretto
 - **Le aree non si accendevano più mentre irrigavano.** Il pallino
   azzurro e le aree colorate della mappa guardavano lo stato del *nostro*
